@@ -1,0 +1,3 @@
+[submodule "scowl"]
+	path = scowl
+	url = https://github.com/en-wl/wordlist.git
