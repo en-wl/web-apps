@@ -1,5 +1,9 @@
 from flask import Flask, request, Response, abort
 from markupsafe import Markup, escape
+import io
+import subprocess
+import tarfile
+import zipfile
 import libscowl
 
 app = Flask(__name__)
@@ -64,6 +68,44 @@ SPECIALS = {
     'hacker':         'Hacker (for example grepped)',
     'roman-numerals': 'Roman Numerals',
 }
+
+with open('scowl/Copyright') as _f:
+    COPYRIGHT_TEXT = _f.read().rstrip('\n')
+
+with open('scowl/README.md') as _f:
+    README_SCOWL = _f.read()
+
+GIT_VER = subprocess.run(
+    ['git', 'log', '--pretty=format:%cd [%h]', '-n', '1'],
+    cwd='scowl', stdout=subprocess.PIPE, text=True, check=True
+).stdout.strip()
+
+
+def build_header(max_size, spellings_raw, max_variant, diacritic, specials):
+    special_str = ', '.join(specials) if specials else '(none)'
+    lines = [
+        'Custom wordlist generated from http://app.aspell.net/create using SCOWL',
+        'with parameters:',
+        f'  diacritic:   {diacritic}',
+        f'  max_size:    {max_size}',
+        f'  max_variant: {VARIANTS[max_variant]}',
+        f'  spelling:    {", ".join(spellings_raw)}',
+        f'  special:     {special_str}',
+        '',
+        f'Using Git Commit From: {GIT_VER}',
+        '',
+        COPYRIGHT_TEXT,
+        '',
+        'http://wordlist.aspell.net/',
+        '',
+    ]
+    return '\n'.join(lines)
+
+
+def tar_add_bytes(tf, name, data):
+    info = tarfile.TarInfo(name=name)
+    info.size = len(data)
+    tf.addfile(info, io.BytesIO(data))
 
 
 def make_option_list(name, default, keys, values):
@@ -200,8 +242,6 @@ def create():
     fmt = request.args.get('format', 'inline')
     if fmt not in ('inline', 'tar.gz', 'zip'):
         abort(400, 'Invalid format')
-    if fmt != 'inline':
-        abort(501)
 
     # Map to libscowl args
     lc_spellings = [SPELLING_MAP[s] for s in spellings_raw]
@@ -221,8 +261,35 @@ def create():
         words |= {libscowl.deaccent(w) for w in words}
 
     # Build response
-    text = '\n'.join(sorted(words)) + '\n'
+    sorted_words = sorted(words)
     charset = 'UTF-8' if encoding == 'utf-8' else 'ISO-8859-1'
-    encoded = text.encode(charset)
-    resp = Response(encoded, content_type=f'text/plain; charset={charset}')
-    return resp
+    header = build_header(max_size, spellings_raw, max_variant, diacritic, specials)
+
+    if fmt == 'inline':
+        text = header + '---\n' + '\n'.join(sorted_words) + '\n'
+        encoded = text.encode(charset)
+        return Response(encoded, content_type=f'text/plain; charset={charset}')
+
+    readme_bytes = header.encode(charset)
+    scowl_readme_bytes = README_SCOWL.encode('utf-8')
+
+    buf = io.BytesIO()
+    if fmt == 'tar.gz':
+        words_bytes = ('\n'.join(sorted_words) + '\n').encode(charset)
+        with tarfile.open(fileobj=buf, mode='w:gz') as tf:
+            tar_add_bytes(tf, 'SCOWL-wl/README', readme_bytes)
+            tar_add_bytes(tf, 'SCOWL-wl/words.txt', words_bytes)
+            tar_add_bytes(tf, 'SCOWL-wl/README_SCOWL.md', scowl_readme_bytes)
+        return Response(buf.getvalue(),
+                        content_type='application/octet-stream',
+                        headers={'Content-Disposition': 'attachment; filename=SCOWL-wl.tar.gz'})
+    else:  # zip
+        words_bytes = ('\r\n'.join(sorted_words) + '\r\n').encode(charset)
+        with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr('README', readme_bytes.replace(b'\n', b'\r\n'))
+            zf.writestr('words.txt', words_bytes)
+            zf.writestr('README_SCOWL.md', scowl_readme_bytes.replace(b'\n', b'\r\n'))
+        return Response(buf.getvalue(),
+                        content_type='application/zip',
+                        headers={'Content-Disposition': 'attachment; filename=SCOWL-wl.zip'})
+
