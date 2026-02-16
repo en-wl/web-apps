@@ -70,7 +70,14 @@ SPECIALS = {
 }
 
 with open('scowl/Copyright') as _f:
-    COPYRIGHT_TEXT = _f.read().rstrip('\n')
+    _copyright_parts = _f.read().rstrip('\n').split('\n===')
+    COPYRIGHT_BASE = _copyright_parts[0].strip('\n')
+    COPYRIGHT_SECTIONS = {}
+    for _part in _copyright_parts[1:]:
+        _first_line, _, _body = _part.partition('\n')
+        _key = _first_line.strip()
+        if _key:
+            COPYRIGHT_SECTIONS[_key] = _body.strip('\n')
 
 with open('scowl/README.md') as _f:
     README_SCOWL = _f.read()
@@ -83,23 +90,24 @@ GIT_VER = subprocess.run(
 
 def build_header(max_size, spellings_raw, max_variant, diacritic, specials):
     special_str = ', '.join(specials) if specials else '(none)'
-    lines = [
-        'Custom wordlist generated from http://app.aspell.net/create using SCOWL',
-        'with parameters:',
-        f'  diacritic:   {diacritic}',
-        f'  max_size:    {max_size}',
-        f'  max_variant: {VARIANTS[max_variant]}',
-        f'  spelling:    {", ".join(spellings_raw)}',
-        f'  special:     {special_str}',
-        '',
-        f'Using Git Commit From: {GIT_VER}',
-        '',
-        COPYRIGHT_TEXT,
-        '',
-        'http://wordlist.aspell.net/',
-        '',
-    ]
-    return '\n'.join(lines)
+    params_str = f"""
+Custom wordlist generated from https://app.aspell.net/create using SCOWL 
+with parameters:
+  diacritic:   {diacritic}
+  max_size:    {max_size}
+  max_variant: {VARIANTS[max_variant]}
+  spelling:    {", ".join(spellings_raw)}
+  special:     {special_str}
+""".strip()
+    parts = [params_str,
+             'https://wordlist.aspell.net',
+             f"Using Git Commit From: {GIT_VER}",
+             COPYRIGHT_BASE]
+    if 'AU' in spellings_raw:
+        parts.append(COPYRIGHT_SECTIONS['AU'])
+    if max_size > 80:
+        parts.append(COPYRIGHT_SECTIONS['UKACD'])
+    return '\n\n'.join(parts) + '\n\n'
 
 
 def tar_add_bytes(tf, name, data):
