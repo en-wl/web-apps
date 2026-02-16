@@ -1,8 +1,10 @@
 from flask import Flask, request, Response, abort
 from markupsafe import Markup, escape
 import io
+import os
 import subprocess
 import tarfile
+import tempfile
 import zipfile
 import libscowl
 
@@ -110,6 +112,45 @@ with parameters:
     return '\n\n'.join(parts) + '\n\n'
 
 
+def dict_name(spellings_raw):
+    normalized = set()
+    for s in spellings_raw:
+        if s in ('GBs', 'GBz'):
+            normalized.add('GB')
+        else:
+            normalized.add(s)
+    if len(normalized) == 1:
+        return f'en_{next(iter(normalized))}-custom'
+    return 'en-custom'
+
+
+def make_hunspell_dict(name, params_str, words):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        parms_path = os.path.join(tmpdir, 'parms.txt')
+        with open(parms_path, 'w') as f:
+            f.write('With Parameters:\n')
+            f.write(params_str)
+
+        env = os.environ.copy()
+        env['SCOWL'] = os.path.abspath('scowl')
+        env.pop('SCOWL_VERSION', None)
+
+        result = subprocess.run(
+            [env['SCOWL'] + '/speller/make-hunspell-dict', '-one', name, 'parms.txt'],
+            input='\n'.join(words) + '\n',
+            encoding='iso-8859-1',
+            cwd=tmpdir,
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            check=True,
+        )
+
+        zip_path = os.path.join(tmpdir, f'hunspell-{name}.zip')
+        with open(zip_path, 'rb') as f:
+            return f.read()
+
+
 def tar_add_bytes(tf, name, data):
     info = tarfile.TarInfo(name=name)
     info.size = len(data)
@@ -208,13 +249,13 @@ def create():
             abort(400, 'Invalid defaults preset')
         return render_form(defaults)
 
-    if download in ('hunspell', 'aspell'):
+    if download == 'aspell':
         abort(501)
 
-    if download != 'wordlist':
+    if download not in ('wordlist', 'hunspell'):
         abort(400, 'Invalid download type')
 
-    # Parse and validate params
+    # Parse and validate shared params
     try:
         max_size = int(request.args.get('max_size', 60))
     except ValueError:
@@ -243,14 +284,6 @@ def create():
         if s not in SPECIALS:
             abort(400, f'Invalid special: {s}')
 
-    encoding = request.args.get('encoding', 'utf-8')
-    if encoding not in ('utf-8', 'iso-8859-1'):
-        abort(400, 'Invalid encoding')
-
-    fmt = request.args.get('format', 'inline')
-    if fmt not in ('inline', 'tar.gz', 'zip'):
-        abort(400, 'Invalid format')
-
     # Map to libscowl args
     lc_spellings = [SPELLING_MAP[s] for s in spellings_raw]
     variant_level = VARIANT_MAP[max_variant]
@@ -268,8 +301,37 @@ def create():
     elif diacritic == 'both':
         words |= {libscowl.deaccent(w) for w in words}
 
-    # Build response
     sorted_words = sorted(words)
+
+    if download == 'hunspell':
+        name = dict_name(spellings_raw)
+        special_str = ', '.join(specials) if specials else '(none)'
+        params_str = (
+            f"  diacritic:   {diacritic}\n"
+            f"  max_size:    {max_size}\n"
+            f"  max_variant: {VARIANTS[max_variant]}\n"
+            f"  spelling:    {', '.join(spellings_raw)}\n"
+            f"  special:     {special_str}\n"
+        )
+        try:
+            zip_bytes = make_hunspell_dict(name, params_str, sorted_words)
+        except subprocess.CalledProcessError as e:
+            abort(500, f'Hunspell dictionary generation failed: {e.stderr}')
+        filename = f'hunspell-{name}.zip'
+        return Response(zip_bytes,
+                        content_type='application/zip',
+                        headers={'Content-Disposition': f'attachment; filename={filename}'})
+
+    # wordlist-specific params
+    encoding = request.args.get('encoding', 'utf-8')
+    if encoding not in ('utf-8', 'iso-8859-1'):
+        abort(400, 'Invalid encoding')
+
+    fmt = request.args.get('format', 'inline')
+    if fmt not in ('inline', 'tar.gz', 'zip'):
+        abort(400, 'Invalid format')
+
+    # Build response
     charset = 'UTF-8' if encoding == 'utf-8' else 'ISO-8859-1'
     header = build_header(max_size, spellings_raw, max_variant, diacritic, specials)
 
