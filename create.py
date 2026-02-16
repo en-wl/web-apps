@@ -16,31 +16,27 @@ DB_PATH = 'scowl.db'
 
 SPELLING_MAP = {'US': 'A', 'GBs': 'B', 'GBz': 'Z', 'CA': 'C', 'AU': 'D'}
 
-VARIANT_MAP = {0: 1, 1: 4, 2: 6, 3: 8}
+LEGACY_VARIANT_MAP = {0: 1, 1: 4, 2: 6, 3: 8}
 
 PRESETS = {
-    'en_US':       {'max_size': 60, 'spelling': ['US'],        'max_variant': 0, 'diacritic': 'strip'},
-    'en_GB-ise':   {'max_size': 60, 'spelling': ['GBs'],       'max_variant': 0, 'diacritic': 'strip'},
-    'en_GB-ize':   {'max_size': 60, 'spelling': ['GBz'],       'max_variant': 0, 'diacritic': 'strip'},
-    'en_CA':       {'max_size': 60, 'spelling': ['CA'],        'max_variant': 0, 'diacritic': 'strip'},
-    'en_AU':       {'max_size': 60, 'spelling': ['AU'],        'max_variant': 0, 'diacritic': 'strip'},
-    'en_US-large': {'max_size': 70, 'spelling': ['US'],        'max_variant': 1, 'diacritic': 'strip'},
-    'en_GB-large': {'max_size': 70, 'spelling': ['GBs','GBz'], 'max_variant': 1, 'diacritic': 'strip'},
-    'en_CA-large': {'max_size': 70, 'spelling': ['CA'],        'max_variant': 1, 'diacritic': 'strip'},
-    'en_AU-large': {'max_size': 70, 'spelling': ['AU'],        'max_variant': 1, 'diacritic': 'strip'},
+    'en_US':       {'max_size': 60, 'spelling': ['US'],        'variant_level': 1, 'diacritic': 'strip'},
+    'en_GB-ise':   {'max_size': 60, 'spelling': ['GBs'],       'variant_level': 1, 'diacritic': 'strip'},
+    'en_GB-ize':   {'max_size': 60, 'spelling': ['GBz'],       'variant_level': 1, 'diacritic': 'strip'},
+    'en_CA':       {'max_size': 60, 'spelling': ['CA'],        'variant_level': 1, 'diacritic': 'strip'},
+    'en_AU':       {'max_size': 60, 'spelling': ['AU'],        'variant_level': 1, 'diacritic': 'strip'},
+    'en_US-large': {'max_size': 70, 'spelling': ['US'],        'variant_level': 4, 'diacritic': 'strip'},
+    'en_GB-large': {'max_size': 70, 'spelling': ['GBs','GBz'], 'variant_level': 4, 'diacritic': 'strip'},
+    'en_CA-large': {'max_size': 70, 'spelling': ['CA'],        'variant_level': 4, 'diacritic': 'strip'},
+    'en_AU-large': {'max_size': 70, 'spelling': ['AU'],        'variant_level': 4, 'diacritic': 'strip'},
 }
 
 SIZES = {
-    10: '10',
-    20: '20',
     35: '35 (small)',
-    40: '40',
     50: '50 (medium)',
-    55: '55',
     60: '60 (default)',
     70: '70 (large)',
     80: '80 (huge)',
-    95: '95 (insane)',
+    85: '85 (huge+)',
 }
 
 SPELLINGS = {
@@ -52,11 +48,17 @@ SPELLINGS = {
 }
 SPELLING_ORDER = ['US', 'GBs', 'GBz', 'CA', 'AU']
 
-VARIANTS = {
+VARIANT_LEVELS = {
     0: '0 (none)',
-    1: '1 (common)',
-    2: '2 (acceptable)',
-    3: '3 (seldom-used)',
+    1: '1 *default*',
+    2: '2 (equal)',
+    3: '3 (disagreement)',
+    4: '4 *common*',
+    5: '5 (variant)',
+    6: '6 *acceptable*',
+    7: '7 (uncommon)',
+    8: '8 (archaic)',
+    9: '9 (invalid)',
 }
 
 DIACRITICS = {
@@ -219,7 +221,7 @@ def render_form(defaults):
 
     sizes_html = make_option_list('max_size', preset['max_size'], sorted(SIZES), SIZES)
     spellings_html = make_check_list('spelling', preset['spelling'], SPELLING_ORDER, SPELLINGS)
-    variant_html = make_option_list('max_variant', preset['max_variant'], sorted(VARIANTS), VARIANTS)
+    variant_html = make_option_list('variant_level', preset['variant_level'], sorted(VARIANT_LEVELS), VARIANT_LEVELS)
     accents_html = make_option_list('diacritic', preset['diacritic'], DIACRITIC_ORDER, DIACRITICS)
     special_defaults = preset.get('special', list(SPECIALS.keys()))
     special_html = make_check_list('special', special_defaults, list(SPECIALS.keys()), SPECIALS)
@@ -299,12 +301,26 @@ def create():
         if s not in SPELLING_MAP:
             abort(400, f'Invalid spelling: {s}')
 
-    try:
-        parms['max_variant'] = int(request.args.get('max_variant', 0))
-    except ValueError:
-        abort(400, 'max_variant must be an integer')
-    if parms['max_variant'] not in VARIANT_MAP:
-        abort(400, 'max_variant must be 0-3')
+    # Handle both legacy max_variant and new variant_level parameters
+    if 'variant_level' in request.args:
+        try:
+            parms['variant_level'] = int(request.args.get('variant_level'))
+        except ValueError:
+            abort(400, 'variant_level must be an integer')
+        if parms['variant_level'] < 0 or parms['variant_level'] > 9:
+            abort(400, 'variant_level must be 0-9')
+    elif 'max_variant' in request.args:
+        # Backwards compatibility: map old max_variant (0-3) to new variant_level
+        try:
+            legacy_variant = int(request.args.get('max_variant'))
+        except ValueError:
+            abort(400, 'max_variant must be an integer')
+        if legacy_variant not in LEGACY_VARIANT_MAP:
+            abort(400, 'max_variant must be 0-3')
+        parms['variant_level'] = LEGACY_VARIANT_MAP[legacy_variant]
+    else:
+        # Default to level 1 (default/include)
+        parms['variant_level'] = 1
 
     parms['diacritic'] = request.args.get('diacritic', 'strip')
     if parms['diacritic'] not in ('strip', 'keep', 'both'):
@@ -317,13 +333,12 @@ def create():
 
     # Map to libscowl args
     lc_spellings = [SPELLING_MAP[s] for s in parms['spelling']]
-    variant_level = VARIANT_MAP[parms['max_variant']]
     categories = libscowl.Include(*parms['special'])
 
     # Generate wordlist
     conn = libscowl.openDB(DB_PATH)
     words = set(libscowl.getWords(conn, size=parms['max_size'], spellings=lc_spellings,
-                                  variantLevel=variant_level, categories=categories,
+                                  variantLevel=parms['variant_level'], categories=categories,
                                   deaccent=False))
 
     # Diacritic processing
