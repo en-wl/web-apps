@@ -151,6 +151,43 @@ def make_hunspell_dict(name, params_str, words):
             return f.read()
 
 
+def dump_parms(parms, prefix=''):
+    lines = []
+    for k in sorted(parms):
+        v = parms[k]
+        if isinstance(v, list):
+            lines.append(f"{prefix}{k}: {' '.join(v) if v else '<none>'}\n")
+        else:
+            lines.append(f"{prefix}{k}: {v}\n")
+    return ''.join(lines)
+
+
+def make_aspell_dict(params_str, words):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        parms_path = os.path.join(tmpdir, 'parms.txt')
+        with open(parms_path, 'w') as f:
+            f.write(params_str)
+
+        env = os.environ.copy()
+        env['SCOWL'] = os.path.abspath('scowl')
+        env.pop('SCOWL_VERSION', None)
+
+        subprocess.run(
+            [env['SCOWL'] + '/speller/make-aspell-custom', GIT_VER, 'parms.txt'],
+            input='\n'.join(words) + '\n',
+            encoding='iso-8859-1',
+            cwd=tmpdir,
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            check=True,
+        )
+
+        out_path = os.path.join(tmpdir, 'aspell6-en-custom.tar.bz2')
+        with open(out_path, 'rb') as f:
+            return f.read()
+
+
 def tar_add_bytes(tf, name, data):
     info = tarfile.TarInfo(name=name)
     info.size = len(data)
@@ -249,10 +286,7 @@ def create():
             abort(400, 'Invalid defaults preset')
         return render_form(defaults)
 
-    if download == 'aspell':
-        abort(501)
-
-    if download not in ('wordlist', 'hunspell'):
+    if download not in ('wordlist', 'hunspell', 'aspell'):
         abort(400, 'Invalid download type')
 
     # Parse and validate shared params
@@ -321,6 +355,23 @@ def create():
         return Response(zip_bytes,
                         content_type='application/zip',
                         headers={'Content-Disposition': f'attachment; filename={filename}'})
+
+    if download == 'aspell':
+        parms = {
+            'diacritic': diacritic,
+            'max_size': max_size,
+            'max_variant': max_variant,
+            'special': specials,
+            'spelling': spellings_raw,
+        }
+        params_str = dump_parms(parms, '  ')
+        try:
+            tar_bytes = make_aspell_dict(params_str, sorted_words)
+        except subprocess.CalledProcessError as e:
+            abort(500, f'Aspell dictionary generation failed: {e.stderr}')
+        return Response(tar_bytes,
+                        content_type='application/octet-stream',
+                        headers={'Content-Disposition': 'attachment; filename=aspell6-en-custom.tar.bz2'})
 
     # wordlist-specific params
     encoding = request.args.get('encoding', 'utf-8')
