@@ -149,13 +149,38 @@ def make_hunspell_dict(name, params_str, words):
 
 
 def dump_parms(parms, prefix=''):
-    lines = []
-    for k in sorted(parms):
-        v = parms[k]
-        if isinstance(v, list):
-            lines.append(f"{prefix}{k}: {' '.join(v) if v else '<none>'}\n")
-        else:
-            lines.append(f"{prefix}{k}: {v}\n")
+    # Size: use display text from SIZES dict
+    size = parms['max_size']
+    lines = [f"{prefix}Size: {SIZES.get(size, str(size))}\n"]
+
+    # Spelling: two-letter codes in order US GB CA AU
+    spellings = parms['spelling']
+    has_gbs = 'GBs' in spellings
+    has_gbz = 'GBz' in spellings
+    spell_parts = []
+    for code in ['US', 'GB', 'CA', 'AU']:
+        if code == 'GB':
+            if has_gbs and has_gbz:
+                spell_parts.append('GB')
+            elif has_gbs:
+                spell_parts.append('GB(-ise)')
+            elif has_gbz:
+                spell_parts.append('GB(-ize/oed)')
+        elif code in spellings:
+            spell_parts.append(code)
+    lines.append(f"{prefix}Spelling: {' '.join(spell_parts) if spell_parts else '<none>'}\n")
+
+    # Variant Level: use display text from VARIANT_LEVELS dict
+    vl = parms['variant_level']
+    lines.append(f"{prefix}Variant Level: {VARIANT_LEVELS.get(vl, str(vl))}\n")
+
+    # Special: space-joined values
+    special = parms['special']
+    lines.append(f"{prefix}Special: {' '.join(special) if special else '<none>'}\n")
+
+    # Diacritics: raw value
+    lines.append(f"{prefix}Diacritics: {parms['diacritic']}\n")
+
     return ''.join(lines)
 
 
