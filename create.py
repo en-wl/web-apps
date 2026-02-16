@@ -90,24 +90,19 @@ GIT_VER = subprocess.run(
 ).stdout.strip()
 
 
-def build_header(max_size, spellings_raw, max_variant, diacritic, specials):
-    special_str = ', '.join(specials) if specials else '(none)'
-    params_str = f"""
-Custom wordlist generated from https://app.aspell.net/create using SCOWL 
-with parameters:
-  diacritic:   {diacritic}
-  max_size:    {max_size}
-  max_variant: {VARIANTS[max_variant]}
-  spelling:    {", ".join(spellings_raw)}
-  special:     {special_str}
-""".strip()
-    parts = [params_str,
+def build_header(parms):
+    params_block = (
+        "Custom wordlist generated from https://app.aspell.net/create using SCOWL\n"
+        "with parameters:\n"
+        + dump_parms(parms, '  ')
+    ).rstrip('\n')
+    parts = [params_block,
              'https://wordlist.aspell.net',
              f"Using Git Commit From: {GIT_VER}",
              COPYRIGHT_BASE]
-    if 'AU' in spellings_raw:
+    if 'AU' in parms['spelling']:
         parts.append(COPYRIGHT_SECTIONS['AU'])
-    if max_size > 80:
+    if parms['max_size'] > 80:
         parts.append(COPYRIGHT_SECTIONS['UKACD'])
     return '\n\n'.join(parts) + '\n\n'
 
@@ -290,63 +285,58 @@ def create():
         abort(400, 'Invalid download type')
 
     # Parse and validate shared params
+    parms = {}
+
     try:
-        max_size = int(request.args.get('max_size', 60))
+        parms['max_size'] = int(request.args.get('max_size', 60))
     except ValueError:
         abort(400, 'max_size must be an integer')
-    if max_size < 0 or max_size > 99:
+    if parms['max_size'] < 0 or parms['max_size'] > 99:
         abort(400, 'max_size must be 0-99')
 
-    spellings_raw = request.args.getlist('spelling') or ['US']
-    for s in spellings_raw:
+    parms['spelling'] = request.args.getlist('spelling') or ['US']
+    for s in parms['spelling']:
         if s not in SPELLING_MAP:
             abort(400, f'Invalid spelling: {s}')
 
     try:
-        max_variant = int(request.args.get('max_variant', 0))
+        parms['max_variant'] = int(request.args.get('max_variant', 0))
     except ValueError:
         abort(400, 'max_variant must be an integer')
-    if max_variant not in VARIANT_MAP:
+    if parms['max_variant'] not in VARIANT_MAP:
         abort(400, 'max_variant must be 0-3')
 
-    diacritic = request.args.get('diacritic', 'strip')
-    if diacritic not in ('strip', 'keep', 'both'):
+    parms['diacritic'] = request.args.get('diacritic', 'strip')
+    if parms['diacritic'] not in ('strip', 'keep', 'both'):
         abort(400, 'Invalid diacritic option')
 
-    specials = request.args.getlist('special')
-    for s in specials:
+    parms['special'] = request.args.getlist('special')
+    for s in parms['special']:
         if s not in SPECIALS:
             abort(400, f'Invalid special: {s}')
 
     # Map to libscowl args
-    lc_spellings = [SPELLING_MAP[s] for s in spellings_raw]
-    variant_level = VARIANT_MAP[max_variant]
-    categories = libscowl.Include(*specials)
+    lc_spellings = [SPELLING_MAP[s] for s in parms['spelling']]
+    variant_level = VARIANT_MAP[parms['max_variant']]
+    categories = libscowl.Include(*parms['special'])
 
     # Generate wordlist
     conn = libscowl.openDB(DB_PATH)
-    words = set(libscowl.getWords(conn, size=max_size, spellings=lc_spellings,
+    words = set(libscowl.getWords(conn, size=parms['max_size'], spellings=lc_spellings,
                                   variantLevel=variant_level, categories=categories,
                                   deaccent=False))
 
     # Diacritic processing
-    if diacritic == 'strip':
+    if parms['diacritic'] == 'strip':
         words = {libscowl.deaccent(w) for w in words}
-    elif diacritic == 'both':
+    elif parms['diacritic'] == 'both':
         words |= {libscowl.deaccent(w) for w in words}
 
     sorted_words = sorted(words)
 
     if download == 'hunspell':
-        name = dict_name(spellings_raw)
-        special_str = ', '.join(specials) if specials else '(none)'
-        params_str = (
-            f"  diacritic:   {diacritic}\n"
-            f"  max_size:    {max_size}\n"
-            f"  max_variant: {VARIANTS[max_variant]}\n"
-            f"  spelling:    {', '.join(spellings_raw)}\n"
-            f"  special:     {special_str}\n"
-        )
+        name = dict_name(parms['spelling'])
+        params_str = dump_parms(parms, '  ')
         try:
             zip_bytes = make_hunspell_dict(name, params_str, sorted_words)
         except subprocess.CalledProcessError as e:
@@ -357,13 +347,6 @@ def create():
                         headers={'Content-Disposition': f'attachment; filename={filename}'})
 
     if download == 'aspell':
-        parms = {
-            'diacritic': diacritic,
-            'max_size': max_size,
-            'max_variant': max_variant,
-            'special': specials,
-            'spelling': spellings_raw,
-        }
         params_str = dump_parms(parms, '  ')
         try:
             tar_bytes = make_aspell_dict(params_str, sorted_words)
@@ -384,7 +367,7 @@ def create():
 
     # Build response
     charset = 'UTF-8' if encoding == 'utf-8' else 'ISO-8859-1'
-    header = build_header(max_size, spellings_raw, max_variant, diacritic, specials)
+    header = build_header(parms)
 
     if fmt == 'inline':
         text = header + '---\n' + '\n'.join(sorted_words) + '\n'
