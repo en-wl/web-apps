@@ -62,9 +62,9 @@ VARIANT_LEVELS = {
 }
 
 DIACRITICS = {
-    'strip': 'Strip (caf\u00e9 becomes cafe)',
+    'strip': 'Strip (café becomes cafe)',
     'keep':  'Keep',
-    'both':  'Include Both (cafe &amp; caf\u00e9)',
+    'both':  'Include Both (cafe & café)',
 }
 DIACRITIC_ORDER = ['strip', 'keep', 'both']
 
@@ -247,7 +247,7 @@ Spelling(s): {spellings_html}
 <p>
 Include Spelling Variants up to Level: {variant_html}
 <p>
-Diacritic Handling (for example caf\u00e9): {accents_html}
+Diacritic Handling (for example café): {accents_html}
 <p>
 Special Lists to Include: {special_html}
 <p style="line-height: 2">
@@ -281,7 +281,7 @@ def create():
         defaults = request.args.get('defaults', 'en_US')
         if defaults not in PRESETS:
             abort(400, 'Invalid defaults preset')
-        return render_form(defaults)
+        return Response(render_form(defaults), content_type='text/html; charset=UTF-8')
 
     if download not in ('wordlist', 'hunspell', 'aspell'):
         abort(400, 'Invalid download type')
