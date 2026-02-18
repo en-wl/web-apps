@@ -1,0 +1,6 @@
+#!/bin/sh
+
+set -e 
+
+git push "$@"
+ssh app.aspell.net /opt/wl-web-app/git/update.sh
