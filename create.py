@@ -9,6 +9,9 @@ import zipfile
 import libscowl
 
 app = Flask(__name__)
+
+with open('style.css') as f:
+    INLINE_STYLE = f'<style>\n{f.read()}</style>'
 # test with: flask --app create run -p 5000
 # http://127.0.0.1:5000/create
 
@@ -41,8 +44,8 @@ SIZES = {
 
 SPELLINGS = {
     'US':  'American',
-    'GBs': 'British (-ise spelling)',
-    'GBz': 'British (-ize/OED spelling)',
+    'GBs': 'British (-ise / traditional)',
+    'GBz': 'British (-ize / Oxford)',
     'CA':  'Canadian',
     'AU':  'Australian',
 }
@@ -254,6 +257,7 @@ def render_form(defaults):
     return f'''<html>
 <head>
 <title>SCOWL Custom List/Dictionary Creator</title>
+{INLINE_STYLE}
 </head>
 <body>
 <p>
@@ -290,6 +294,8 @@ Format: <select name="format">
 <button type="submit" name="download" value="aspell">Download as Aspell Dictionary</button>
 <p>
 <button type="reset">Reset to Defaults</button>
+<p style="color: #808080;">
+{GIT_VER}
 <p>
 <i>
 For additional help on the meaning of any of these options please see the <a href="http://wordlist.aspell.net/scowl-readme/">SCOWL Readme</a>.
