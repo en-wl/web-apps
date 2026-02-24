@@ -2,6 +2,7 @@ from flask import Flask, request, Response, abort
 from markupsafe import Markup, escape
 import io
 import os
+import sys
 import subprocess
 import tarfile
 import tempfile
@@ -386,7 +387,8 @@ def create():
         try:
             zip_bytes = make_hunspell_dict(name, params_str, sorted_words)
         except subprocess.CalledProcessError as e:
-            abort(500, f'Hunspell dictionary generation failed: {e.stderr}')
+            sys.stderr.write(e.stderr)
+            raise
         filename = f'hunspell-{name}.zip'
         return Response(zip_bytes,
                         content_type='application/zip',
@@ -397,7 +399,8 @@ def create():
         try:
             tar_bytes = make_aspell_dict(params_str, sorted_words)
         except subprocess.CalledProcessError as e:
-            abort(500, f'Aspell dictionary generation failed: {e.stderr}')
+            sys.stderr.write(e.stderr)
+            raise
         return Response(tar_bytes,
                         content_type='application/octet-stream',
                         headers={'Content-Disposition': 'attachment; filename=aspell6-en-custom.tar.bz2'})
