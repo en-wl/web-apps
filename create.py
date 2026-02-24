@@ -262,20 +262,23 @@ def render_form(defaults):
 </head>
 <body>
 <p>
-Use this tool to create and download custimized Word Lists or Hunspell
-dictionaries from <a href="http://wordlist.aspell.net/">SCOWL</a>.
+Use this tool to create and download customized Word Lists or speller
+dictionaries from <a href="https://wordlist.aspell.net/">SCOWL</a>.
 </p>
 <p>
 Using defaults for <b>{escape(defaults)}</b> dictionary.
 <p>
 Reload with defaults from: {dicts_html} dictionary.
+(<a href="https://wordlist.aspell.net/hunspell-readme/" target="_blank">more info</a>)
 </p>
 <form>
 SCOWL Size: {sizes_html}
+(<a href="https://github.com/en-wl/wordlist/blob/v2/README.md#size" target="_blank">more info</a>)
 <p>
 Spelling(s): {spellings_html}
 <p>
 Include Spelling Variants up to Level: {variant_html}
+(<a href="https://github.com/en-wl/wordlist/blob/v2/README.md#variant-level" target="_blank">more info</a>)
 <p>
 Diacritic Handling (for example café): {accents_html}
 <p>
@@ -298,9 +301,6 @@ Format: <select name="format">
 <p style="color: #808080;">
 {GIT_VER}
 <p>
-<i>
-For additional help on the meaning of any of these options please see the <a href="http://wordlist.aspell.net/scowl-readme/">SCOWL Readme</a>.
-</i>
 </form>
 </body>'''
 
