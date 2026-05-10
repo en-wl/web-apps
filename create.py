@@ -9,12 +9,13 @@ import tempfile
 import zipfile
 import libscowl
 
+# test with: flask --app create run -p 5000
+# http://127.0.0.1:5000/create
+
 app = Flask(__name__)
 
 with open('style.css') as f:
     INLINE_STYLE = f'<style>\n{f.read()}</style>'
-# test with: flask --app create run -p 5000
-# http://127.0.0.1:5000/create
 
 DB_PATH = 'scowl.db'
 
@@ -98,8 +99,8 @@ GIT_VER = subprocess.run(
 
 def build_header(parms):
     params_block = (
-        "Custom wordlist generated from https://app.aspell.net/create using SCOWL\n"
-        "with parameters:\n"
+        "Custom wordlist generated from https://app.aspell.net/create using\n"
+        "the English Speller Database (ESDB) with parameters:\n"
         + dump_parms(parms, '  ')
     ).rstrip('\n')
     parts = [params_block,
@@ -257,13 +258,14 @@ def render_form(defaults):
 
     return f'''<html>
 <head>
-<title>SCOWL Custom List/Dictionary Creator</title>
+<title>ESDB Custom List/Dictionary Creator</title>
 {INLINE_STYLE}
 </head>
 <body>
 <p>
 Use this tool to create and download customized Word Lists or speller
-dictionaries from <a href="https://wordlist.aspell.net/">SCOWL</a>.
+dictionaries from the
+<a href="https://wordlist.aspell.net/">English Speller Database (ESDB)</a>.
 </p>
 <p>
 Using defaults for <b>{escape(defaults)}</b> dictionary.
@@ -272,7 +274,7 @@ Reload with defaults from: {dicts_html} dictionary.
 (<a href="https://wordlist.aspell.net/hunspell-readme/" target="_blank">more info</a>)
 </p>
 <form>
-SCOWL Size: {sizes_html}
+ESDB Size: {sizes_html}
 (<a href="https://github.com/en-wl/wordlist/blob/v2/README.md#size" target="_blank">more info</a>)
 <p>
 Spelling(s): {spellings_html}
