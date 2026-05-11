@@ -1,7 +1,10 @@
 from flask import Flask, request, Response, abort
 from markupsafe import Markup, escape
+from datetime import datetime
+from pathlib import Path
 import io
 import os
+import re
 import sys
 import subprocess
 import tarfile
@@ -51,6 +54,7 @@ SPELLINGS = {
     'CA':  'Canadian',
     'AU':  'Australian',
 }
+
 SPELLING_ORDER = ['US', 'GBs', 'GBz', 'CA', 'AU']
 
 VARIANT_LEVELS = {
@@ -113,7 +117,6 @@ def build_header(parms):
         parts.append(COPYRIGHT_SECTIONS['UKACD'])
     return '\n\n'.join(parts) + '\n\n'
 
-
 def dict_name(spellings_raw):
     normalized = set()
     for s in spellings_raw:
@@ -125,32 +128,95 @@ def dict_name(spellings_raw):
         return f'en_{next(iter(normalized))}-custom'
     return 'en-custom'
 
+def locale_name(spellings_raw):
+    if 'US' in spellings_raw:
+        return 'en-US'
+    elif 'GBs' in spellings_raw:
+        return 'en-GB'
+    elif 'GBz' in spellings_raw:
+        return 'en-GB-oxendict'
+    elif 'CA' in spellings_raw:
+        return 'en-CA'
+    elif 'AU' in spellings_raw:
+        return 'en-AU'
+    raise ValueError('unknown spelling')
 
-def make_hunspell_dict(name, params_str, words):
+def make_hunspell_dict(tmpdir, name, params_str, words):
+    parms_path = os.path.join(tmpdir, 'parms.txt')
+    with open(parms_path, 'w') as f:
+        f.write('With Parameters:\n')
+        f.write(params_str)
+
+    env = os.environ.copy()
+    env['SCOWL'] = os.path.abspath('scowl')
+    env.pop('SCOWL_VERSION', None)
+
+    result = subprocess.run(
+        [env['SCOWL'] + '/speller/make-hunspell-dict', '-one', name, 'parms.txt'],
+        input='\n'.join(words) + '\n',
+        encoding='iso-8859-1',
+        cwd=tmpdir,
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        check=True,
+    )
+
+
+def make_hunspell_zip(name, params_str, words):
     with tempfile.TemporaryDirectory() as tmpdir:
-        parms_path = os.path.join(tmpdir, 'parms.txt')
-        with open(parms_path, 'w') as f:
-            f.write('With Parameters:\n')
-            f.write(params_str)
-
-        env = os.environ.copy()
-        env['SCOWL'] = os.path.abspath('scowl')
-        env.pop('SCOWL_VERSION', None)
-
-        result = subprocess.run(
-            [env['SCOWL'] + '/speller/make-hunspell-dict', '-one', name, 'parms.txt'],
-            input='\n'.join(words) + '\n',
-            encoding='iso-8859-1',
-            cwd=tmpdir,
-            env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            check=True,
-        )
+        make_hunspell_dict(tmpdir, name, params_str, words)
 
         zip_path = os.path.join(tmpdir, f'hunspell-{name}.zip')
         with open(zip_path, 'rb') as f:
             return f.read()
+
+def extension_descr(locale, params):
+    return (
+        f"Custom {locale} speller dictionary "
+        "generated from https://app.aspell.net/create using "
+        "the English Speller Database (ESDB) with parameters:\n"
+        + dump_parms(params, '  ')
+    ).rstrip('\n')
+
+
+def make_libreoffice_ext(name, locale, params, words):
+    import make_libreoffice as lo
+
+    params_str = dump_parms(params, '  ')
+    config = {
+        'pkg':   f"dict-{locale}-esdb",
+        'dicts': {locale: name},
+        'id':    f'custom.{locale}',
+        'name':  f'Custom {locale} speller dictionary',
+        'descr': Path('descr.txt'),
+    }
+
+    version = datetime.now().strftime('%Y.%m.%d.%H%M')
+    git_hash = subprocess.run(
+        ['git', 'rev-parse', '--short', 'HEAD'],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    version += f'-{git_hash}'
+
+    speller_dir = os.path.abspath('scowl/speller')
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        make_hunspell_dict(tmpdir, name, params_str, words)
+        os.symlink(
+            os.path.join(speller_dir, 'libreoffice'),
+            os.path.join(tmpdir, 'libreoffice'),
+        )
+        orig_wd = os.getcwd()
+        try:
+            os.chdir(tmpdir)
+            with open('descr.txt', 'w') as f:
+                f.write(extension_descr(locale, params))
+            ext_name = lo.mk_dist(config, version)
+            with open(ext_name, 'rb') as f:
+                return f.read(), ext_name
+        finally:
+            os.chdir(orig_wd)
 
 
 def dump_parms(parms, prefix=''):
@@ -295,9 +361,19 @@ Format: <select name="format">
   <option value="tar.gz">tar.gz (Unix EOL)
   <option value="zip">zip (Windows EOL)
 </select>
-<br>
+<p>
 <button type="submit" name="download" value="hunspell">Download as Hunspell Dictionary</button>
 <button type="submit" name="download" value="aspell">Download as Aspell Dictionary</button>
+<p>
+<button type="submit" name="download" value="libreoffice">Download as LibreOffice extension</button>
+<br>
+The extension will install the dictionary under the locale of the first
+spelling selected.  To use, make sure no other extensions are installing a
+dictionary under the same locale.  
+You can test that the dictionary are installed correctly using this doc:
+<a href="https://wordlist.aspell.net/test-doc-2026.02.25.odt">test-doc-2026.02.25.odt</a>.
+The extension does not contain any executable code, so it should be safe to
+install even though it is unsigned.
 <p>
 <button type="reset">Reset to Defaults</button>
 <p style="color: #808080;">
@@ -306,6 +382,8 @@ Format: <select name="format">
 </form>
 </body>'''
 
+# <button type="submit" name="download" value="libreoffice">Download as Firefox/Thunderbird extension</button>
+# Custom Locale String: <input type="text" size=20 name="locale"></input><br>
 
 @app.route('/create')
 def create():
@@ -317,7 +395,7 @@ def create():
             abort(400, 'Invalid defaults preset')
         return Response(render_form(defaults), content_type='text/html; charset=UTF-8')
 
-    if download not in ('wordlist', 'hunspell', 'aspell'):
+    if download not in ('wordlist', 'hunspell', 'aspell', 'libreoffice'):
         abort(400, 'Invalid download type')
 
     # Parse and validate shared params
@@ -381,19 +459,37 @@ def create():
     elif parms['diacritic'] == 'both':
         words |= {libscowl.deaccent(w) for w in words}
 
+    # locale = request.args.get('locale', '').strip()
+    # if locale:
+    #     if not re.fullmatch(r'[a-zA-Z0-9-]+', locale):
+    #         abort(400, f'Invalid custom locale: {locale}')
+    # else:
+    locale = locale_name(parms['spelling'])
+
     sorted_words = sorted(words)
 
     if download == 'hunspell':
         name = dict_name(parms['spelling'])
         params_str = dump_parms(parms, '  ')
         try:
-            zip_bytes = make_hunspell_dict(name, params_str, sorted_words)
+            zip_bytes = make_hunspell_zip(name, params_str, sorted_words)
         except subprocess.CalledProcessError as e:
             sys.stderr.write(e.stderr)
             raise
         filename = f'hunspell-{name}.zip'
         return Response(zip_bytes,
                         content_type='application/zip',
+                        headers={'Content-Disposition': f'attachment; filename={filename}'})
+
+    if download == 'libreoffice':
+        name = dict_name(parms['spelling'])
+        try:
+            (ext_bytes, filename) = make_libreoffice_ext(name, locale, parms, sorted_words)
+        except subprocess.CalledProcessError as e:
+            sys.stderr.write(e.stderr)
+            raise
+        return Response(ext_bytes,
+                        content_type='application/octet-stream',
                         headers={'Content-Disposition': f'attachment; filename={filename}'})
 
     if download == 'aspell':
