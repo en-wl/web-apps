@@ -3,6 +3,7 @@ from markupsafe import Markup, escape
 from datetime import datetime, timezone
 from pathlib import Path
 import io
+import json
 import os
 import re
 import sys
@@ -106,12 +107,12 @@ GIT_HASH = subprocess.run(
 ).stdout.strip()
 
 def build_header(parms):
-    params_block = (
+    parms_block = (
         "Custom wordlist generated from https://app.aspell.net/create using\n"
         "the English Speller Database (ESDB) with parameters:\n"
-        + dump_parms(parms, '  ')
+        + dump_parms(parms)
     ).rstrip('\n')
-    parts = [params_block,
+    parts = [parms_block,
              'https://wordlist.aspell.net',
              f"Using Git Commit From: {GIT_VER}",
              COPYRIGHT_BASE]
@@ -145,11 +146,11 @@ def locale_name(spellings_raw):
         return 'en-AU'
     raise ValueError('unknown spelling')
 
-def make_hunspell_dict(tmpdir, name, params_str, words):
+def make_hunspell_dict(tmpdir, name, parms_str, words):
     parms_path = os.path.join(tmpdir, 'parms.txt')
     with open(parms_path, 'w') as f:
         f.write('With Parameters:\n')
-        f.write(params_str)
+        f.write(parms_str)
 
     env = os.environ.copy()
     env['SCOWL'] = os.path.abspath('scowl')
@@ -167,22 +168,13 @@ def make_hunspell_dict(tmpdir, name, params_str, words):
     )
 
 
-def make_hunspell_zip(name, params_str, words):
+def make_hunspell_zip(name, parms_str, words):
     with tempfile.TemporaryDirectory() as tmpdir:
-        make_hunspell_dict(tmpdir, name, params_str, words)
+        make_hunspell_dict(tmpdir, name, parms_str, words)
 
         zip_path = os.path.join(tmpdir, f'hunspell-{name}.zip')
         with open(zip_path, 'rb') as f:
             return f.read()
-
-def extension_descr(locale, now, params):
-    date = now.strftime('%Y-%m-%d %H:%M:%S UTC')
-    return (
-        f"Custom {locale} speller dictionary generated from "
-        f"https://app.aspell.net/create on {date}, "
-        f"using the English Speller Database (ESDB, git rev {GIT_HASH}) with parameters:\n"
-        + dump_parms(params, '  ')
-    ).rstrip('\n')
 
 def extension_version(now):
     year = now.year
@@ -191,14 +183,14 @@ def extension_version(now):
     return '.'.join(str(x) for x in (year, dayinyear, time))
 
 
-def make_libreoffice_ext(name, locale, params, words):
+def make_libreoffice_ext(name, locale, parms, words):
     import make_libreoffice as lo
 
     now = datetime.now(timezone.utc)
+    date = now.strftime('%Y-%m-%d %H:%M:%S UTC')
 
-    params_str = dump_parms(params, '  ')
     config = {
-        'pkg':   f"dict-{locale}-esdb",
+        'pkg':   f"dict-{locale}-ESDB-custom",
         'dicts': {locale: name},
         'id':    f'custom.{locale}',
         'name':  f'Custom {locale} speller dictionary',
@@ -209,7 +201,7 @@ def make_libreoffice_ext(name, locale, params, words):
     speller_dir = os.path.abspath('scowl/speller')
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        make_hunspell_dict(tmpdir, name, params_str, words)
+        make_hunspell_dict(tmpdir, name, dump_parms(parms), words)
         os.symlink(
             os.path.join(speller_dir, 'libreoffice'),
             os.path.join(tmpdir, 'libreoffice'),
@@ -218,7 +210,10 @@ def make_libreoffice_ext(name, locale, params, words):
         try:
             os.chdir(tmpdir)
             with open('descr.txt', 'w') as f:
-                f.write(extension_descr(locale, now, params))
+                f.write(f"Custom {locale} speller dictionary generated from "
+                        f"https://app.aspell.net/create on {date}, "
+                        f"using the English Speller Database (ESDB, git rev {GIT_HASH}) with parameters:\n")
+                f.write(dump_parms(parms).rstrip('\n'))
             ext_name = lo.mk_dist(config, version)
             with open(ext_name, 'rb') as f:
                 return f.read(), ext_name
@@ -226,10 +221,45 @@ def make_libreoffice_ext(name, locale, params, words):
             os.chdir(orig_wd)
 
 
-def dump_parms(parms, prefix=''):
+def make_firefox_ext(name, locale, parms, words):
+    now = datetime.now(timezone.utc)
+    date = now.strftime('%Y-%m-%d %H:%M:%S UTC')
+
+    version = extension_version(now)
+
+    manifest = {
+        "manifest_version": 2,
+        "name": f"Custom {locale} Dictionary (ESDB)",
+        "version": version,
+        "description": (
+            f"Custom {locale} speller dictionary created from the English Speller Database (ESDB, git rev {GIT_HASH}) "
+            f"with parameters: {'; '.join(parm_lines(parms))}"),
+        "author": "Kevin Atkinson",
+        "homepage_url": "https://app.aspell.net/create",
+        "browser_specific_settings": {
+            "gecko": {"id": f"{locale}-custom@wordlist.aspell.net"}
+        },
+        "dictionaries": {locale: f"dictionaries/{name}.dic"},
+    }
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        make_hunspell_dict(tmpdir, name, dump_parms(parms), words)
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr('manifest.json', json.dumps(manifest, indent=4))
+            zf.write(f'{tmpdir}/{name}.dic', f"dictionaries/{name}.dic")
+            zf.write(f'{tmpdir}/{name}.aff', f"dictionaries/{name}.aff")
+            zf.write(f'{tmpdir}/README_{name}.txt', f"README_{name}.txt")
+
+        filename = f"dict-{locale}-ESDB-custom-{version}.xpi"
+        return buf.getvalue(), filename
+
+
+def parm_lines(parms):
     # Size: use display text from SIZES dict
     size = parms['max_size']
-    lines = [f"{prefix}Size: {SIZES.get(size, str(size))}\n"]
+    lines = [f"Size: {SIZES.get(size, str(size))}"]
 
     # Spelling: two-letter codes in order US GB CA AU
     spellings = parms['spelling']
@@ -246,27 +276,30 @@ def dump_parms(parms, prefix=''):
                 spell_parts.append('GB(-ize/oed)')
         elif code in spellings:
             spell_parts.append(code)
-    lines.append(f"{prefix}Spelling: {' '.join(spell_parts) if spell_parts else '<none>'}\n")
+    lines.append(f"Spelling: {' '.join(spell_parts) if spell_parts else '<none>'}")
 
     # Variant Level: use display text from VARIANT_LEVELS dict
     vl = parms['variant_level']
-    lines.append(f"{prefix}Variant Level: {VARIANT_LEVELS.get(vl, str(vl))}\n")
+    lines.append(f"Variant Level: {VARIANT_LEVELS.get(vl, str(vl))}")
 
     # Special: space-joined values
     special = parms['special']
-    lines.append(f"{prefix}Special: {' '.join(special) if special else '<none>'}\n")
+    lines.append(f"Special: {' '.join(special) if special else '<none>'}")
 
     # Diacritics: raw value
-    lines.append(f"{prefix}Diacritics: {parms['diacritic']}\n")
+    lines.append(f"Diacritics: {parms['diacritic']}")
 
-    return ''.join(lines)
+    return lines
+
+def dump_parms(parms):
+    return ''.join(f"  {line}\n" for line in parm_lines(parms))
 
 
-def make_aspell_dict(params_str, words):
+def make_aspell_dict(parms_str, words):
     with tempfile.TemporaryDirectory() as tmpdir:
         parms_path = os.path.join(tmpdir, 'parms.txt')
         with open(parms_path, 'w') as f:
-            f.write(params_str)
+            f.write(parms_str)
 
         env = os.environ.copy()
         env['SCOWL'] = os.path.abspath('scowl')
@@ -373,12 +406,13 @@ Format: <select name="format">
 <button type="submit" name="download" value="aspell">Download as Aspell Dictionary</button>
 <p>
 <button type="submit" name="download" value="libreoffice">Download as LibreOffice extension</button>
+<button type="submit" name="download" value="firefox">Download as Firefox/Thunderbird extension</button>
 <br>
 The extension will install the dictionary under the locale of the first
 spelling selected.  To use, make sure no other extensions are installing a
-dictionary under the same locale.  
-You can test that the dictionary are installed correctly using this doc:
-<a href="https://wordlist.aspell.net/test-doc-2026.02.25.odt">test-doc-2026.02.25.odt</a>.
+dictionary under the same locale.  To verify that the correct spell-checker
+dictionary is being used see <a
+href="https://wordlist.aspell.net/test-doc-2026.02.25">test-doc-2026.02.25</a>.
 The extension does not contain any executable code, so it should be safe to
 install even though it is unsigned.
 <p>
@@ -389,7 +423,6 @@ install even though it is unsigned.
 </form>
 </body>'''
 
-# <button type="submit" name="download" value="libreoffice">Download as Firefox/Thunderbird extension</button>
 # Custom Locale String: <input type="text" size=20 name="locale"></input><br>
 
 @app.route('/create')
@@ -402,10 +435,10 @@ def create():
             abort(400, 'Invalid defaults preset')
         return Response(render_form(defaults), content_type='text/html; charset=UTF-8')
 
-    if download not in ('wordlist', 'hunspell', 'aspell', 'libreoffice'):
+    if download not in ('wordlist', 'hunspell', 'aspell', 'libreoffice', 'firefox'):
         abort(400, 'Invalid download type')
 
-    # Parse and validate shared params
+    # Parse and validate shared parms
     parms = {}
 
     try:
@@ -477,9 +510,9 @@ def create():
 
     if download == 'hunspell':
         name = dict_name(parms['spelling'])
-        params_str = dump_parms(parms, '  ')
+        parms_str = dump_parms(parms)
         try:
-            zip_bytes = make_hunspell_zip(name, params_str, sorted_words)
+            zip_bytes = make_hunspell_zip(name, parms_str, sorted_words)
         except subprocess.CalledProcessError as e:
             sys.stderr.write(e.stderr)
             raise
@@ -499,10 +532,21 @@ def create():
                         content_type='application/octet-stream',
                         headers={'Content-Disposition': f'attachment; filename={filename}'})
 
-    if download == 'aspell':
-        params_str = dump_parms(parms, '  ')
+    if download == 'firefox':
+        name = dict_name(parms['spelling'])
         try:
-            tar_bytes = make_aspell_dict(params_str, sorted_words)
+            (ext_bytes, filename) = make_firefox_ext(name, locale, parms, sorted_words)
+        except subprocess.CalledProcessError as e:
+            sys.stderr.write(e.stderr)
+            raise
+        return Response(ext_bytes,
+                        content_type='application/octet-stream',
+                        headers={'Content-Disposition': f'attachment; filename={filename}'})
+
+    if download == 'aspell':
+        parms_str = dump_parms(parms)
+        try:
+            tar_bytes = make_aspell_dict(parms_str, sorted_words)
         except subprocess.CalledProcessError as e:
             sys.stderr.write(e.stderr)
             raise
@@ -510,7 +554,7 @@ def create():
                         content_type='application/octet-stream',
                         headers={'Content-Disposition': 'attachment; filename=aspell6-en-custom.tar.bz2'})
 
-    # wordlist-specific params
+    # wordlist-specific parms
     encoding = request.args.get('encoding', 'utf-8')
     if encoding not in ('utf-8', 'iso-8859-1'):
         abort(400, 'Invalid encoding')
