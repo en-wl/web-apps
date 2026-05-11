@@ -1,6 +1,6 @@
 from flask import Flask, request, Response, abort
 from markupsafe import Markup, escape
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 import io
 import os
@@ -100,6 +100,10 @@ GIT_VER = subprocess.run(
     cwd='scowl', stdout=subprocess.PIPE, text=True, check=True
 ).stdout.strip()
 
+GIT_HASH = subprocess.run(
+    ['git', 'rev-parse', '--short', 'HEAD'],
+    cwd='scowl', stdout=subprocess.PIPE, text=True, check=True,
+).stdout.strip()
 
 def build_header(parms):
     params_block = (
@@ -171,17 +175,26 @@ def make_hunspell_zip(name, params_str, words):
         with open(zip_path, 'rb') as f:
             return f.read()
 
-def extension_descr(locale, params):
+def extension_descr(locale, now, params):
+    date = now.strftime('%Y-%m-%d %H:%M:%S UTC')
     return (
-        f"Custom {locale} speller dictionary "
-        "generated from https://app.aspell.net/create using "
-        "the English Speller Database (ESDB) with parameters:\n"
+        f"Custom {locale} speller dictionary generated from "
+        f"https://app.aspell.net/create on {date}, "
+        f"using the English Speller Database (ESDB, git rev {GIT_HASH}) with parameters:\n"
         + dump_parms(params, '  ')
     ).rstrip('\n')
+
+def extension_version(now):
+    year = now.year
+    dayinyear = now.timetuple().tm_yday
+    time = 10 * (now.hour * 60 + now.minute) + min(now.second // 6, 9)
+    return '.'.join(str(x) for x in (year, dayinyear, time))
 
 
 def make_libreoffice_ext(name, locale, params, words):
     import make_libreoffice as lo
+
+    now = datetime.now(timezone.utc)
 
     params_str = dump_parms(params, '  ')
     config = {
@@ -191,14 +204,8 @@ def make_libreoffice_ext(name, locale, params, words):
         'name':  f'Custom {locale} speller dictionary',
         'descr': Path('descr.txt'),
     }
-
-    version = datetime.now().strftime('%Y.%m.%d.%H%M')
-    git_hash = subprocess.run(
-        ['git', 'rev-parse', '--short', 'HEAD'],
-        capture_output=True, text=True, check=True,
-    ).stdout.strip()
-    version += f'-{git_hash}'
-
+    version = extension_version(now)
+    
     speller_dir = os.path.abspath('scowl/speller')
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -211,7 +218,7 @@ def make_libreoffice_ext(name, locale, params, words):
         try:
             os.chdir(tmpdir)
             with open('descr.txt', 'w') as f:
-                f.write(extension_descr(locale, params))
+                f.write(extension_descr(locale, now, params))
             ext_name = lo.mk_dist(config, version)
             with open(ext_name, 'rb') as f:
                 return f.read(), ext_name
