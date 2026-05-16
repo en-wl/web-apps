@@ -3,13 +3,10 @@
 --   word_key text not null
 -- ) without rowid;
 
--- insert into input 
+-- insert into input
 -- select word, word_key from fuzzy where word in ('color', 'velcro', 'doth', 'cross-reference', 'cafe', 'café', 'militaries', 'checkboxes');
 
---create temp table in_dict 
---as select * from speller_dicts where adj_word in (select word from input);
-
-create temp table in_esdb as 
+create temp table in_esdb as
 select i.word as orig_word, w.word = i.word as exact, w.*
   from words as w
   join fuzzy on w.word = fuzzy.word
@@ -38,18 +35,38 @@ create temp view inexact as
 select * from in_dict where not exact;
 
 create temp view variant_in_dict as
-select a.orig_word, a.exact, b.word, d.*
-  from in_esdb a 
-  join words b using (group_id, pos) 
+select a.orig_word, a.word_id, b.word,
+       en_US, en_US_large, en_GB_ise, en_GB_ize, en_GB_large, en_CA, en_CA_large, en_AU, en_AU_large
+  from in_esdb a
+  join words b using (group_id, pos)
   join speller_dicts as d on b.word_id = d.word_id
- where a.word_id != b.word_id and a.exact;
-select * from variant_in_dict limit 0;
+ where exact and a.word_id != b.word_id;
+
+create temp view variant_in_dict_info as
+select a.word, a.word_id, a.variant_level, a.spelling,
+       b.spelling as nv_spelling, b.word as nv_word,
+       en_US, en_US_large, en_GB_ise, en_GB_ize, en_GB_large, en_CA, en_CA_large, en_AU, en_AU_large
+  from words_w_variant_info a
+  join words_w_variant_info b using (group_id, pos)
+  join speller_dicts as d on b.word_id = d.word_id
+ where a.word_id != b.word_id and b.variant_level = 0;
 
 create temp view other_form_in_dict as
-select a.orig_word, a.exact, b.word, d.*
-  from in_esdb a 
-  join words b using (lemma_id) 
+select a.orig_word, a.word_id, b.word,
+       en_US, en_US_large, en_GB_ise, en_GB_ize, en_GB_large, en_CA, en_CA_large, en_AU, en_AU_large
+  from in_esdb a
+  join words b using (lemma_id)
   join speller_dicts as d on b.word_id = d.word_id
- where a.word_id != b.word_id and a.exact;
-select * from other_form_in_dict limit 0;
+ where exact and a.word_id != b.word_id;
+
+create temp view other_form_in_dict_info as
+select a.*,
+       en_US, en_US_large, en_GB_ise, en_GB_ize, en_GB_large, en_CA, en_CA_large, en_AU, en_AU_large
+  from entries a
+  join words b using (lemma_id)
+  join speller_dicts as d on b.word_id = d.word_id
+ where a.word_id != b.word_id;
+
+
+
 

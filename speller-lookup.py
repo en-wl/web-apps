@@ -15,6 +15,7 @@ import sys
 import tarfile
 import tempfile
 import zipfile
+from collections import namedtuple
 import libscowl
 from libscowl import clusterKey, validateWord
 
@@ -24,26 +25,37 @@ from libscowl import clusterKey, validateWord
 #   flask --app speller-lookup run -p 5000
 #   http://127.0.0.1:5000/speller-lookup
 
+# Used for startup of flask app and then deleted, each thread has it's own connection
+# connection reused for command line app
+conn = sqlite3.connect('file:scowl.db?mode=ro', uri=True)
+
 DB_PATH = 'scowl.db'
 
+DictInfo = namedtuple('DictInfo', ['name', 'larger', 'spellings', 'lookup_order'])
+
 DICTS = {
-    'en_US':       'en_US',
-    'en_US_large': 'en_US-large',
-    'en_GB_ise':   'en_GB-ise',
-    'en_GB_ize':   'en_GB-ize',
-    'en_GB_large': 'en_GB-large',
-    'en_CA':       'en_CA',
-    'en_CA_large': 'en_CA-large',
-    'en_AU':       'en_AU',
-    'en_AU_large': 'en_AU-large',
+    'en_US':       DictInfo('en_US',       'en_US_large', "('_','A')", 'BZCD'),
+    'en_US_large': DictInfo('en_US-large', None,          "('_','A')", 'BZCD'),
+    'en_GB_ise':   DictInfo('en_GB-ise',   'en_GB_large', "('_','B')", 'ZACD'),
+    'en_GB_ize':   DictInfo('en_GB-ize',   'en_GB_large', "('_','Z')", 'BACD'),
+    'en_GB_large': DictInfo('en_GB-large', None,          "('_','B','Z')", 'ZACD'),
+    'en_CA':       DictInfo('en_CA',       'en_CA_large', "('_','C')", 'BAZD'),
+    'en_CA_large': DictInfo('en_CA-large', None,          "('_','C')", 'BAZD'),
+    'en_AU':       DictInfo('en_AU',       'en_AU_large', "('_','D')", 'BZAC'),
+    'en_AU_large': DictInfo('en_AU-large', None,          "('_','D')", 'BZAC'),
 }
 
-LARGER_DICT = {
-    'en_US':     'en_US_large',
-    'en_GB_ise': 'en_GB_large',
-    'en_GB_ize': 'en_GB_large',
-    'en_CA':     'en_CA_large',
-    'en_AU':     'en_AU_large',
+SPELLINGS = {
+    'A': 'American',
+    'B': 'British',
+    'C': 'Canadian',
+    'D': 'Australian',
+    'Z': 'Oxford',
+}
+
+VARIANTS = {
+    level: descr if descr == 'variant' else f"{descr} variant"
+      for level, descr in conn.execute("select variant_level, variant_descr from variant_levels")
 }
 
 def init(conn):
@@ -79,49 +91,156 @@ def proc(conn, dict_name):
     conn.execute("insert or ignore into status select word, '+' from input")
 
 class TableCell:
-    # slots: 'body' # noescape
-    def __init__(self, body):
+    def __init__(self, body, css_class=None):
         self.body = body
+        self.css_class = css_class
+
+def nv_word_variant(conn, dict_key, word):
+    return conn.execute(f"""
+with
+  annotated as (
+    select word_id, variant_level, min(variant_level) over () as min_variant_level, nv_word
+      from variant_in_dict_info
+     where word = ? and spelling = nv_spelling and nv_spelling in {DICTS[dict_key].spellings} and {dict_key})
+select group_concat(distinct word_id) as word_ids, min(variant_level) as variant_level, nv_word
+  from annotated
+ where variant_level = min_variant_level
+group by nv_word;
+    """, (word,))
+
+def nv_word_other(conn, dict_key, word):
+    return conn.execute(f"""
+with
+  annotated as (
+    select word_id, spelling, variant_level, min(variant_level) over () as min_variant_level, nv_word
+      from variant_in_dict_info
+     where word = ? and nv_spelling in {DICTS[dict_key].spellings} and {dict_key})
+select group_concat(distinct word_id) as words_ids, group_concat(distinct spelling) as spellings, nv_word
+  from annotated
+ where variant_level = min_variant_level
+group by nv_word;
+    """, (word,))
+
+def missing_form(conn, dict_key, word):
+    return conn.execute(f"""
+select distinct word_id = lemma_id as is_lemma, pos == 'ns' as is_plural
+  from other_form_in_dict_info
+ where word = ? and {dict_key}
+    """, (word,))
+
+def nv_word_all(conn, dict_key, word):
+    return conn.execute(f"""
+select group_concat(distinct word_id) as words_ids, word
+  from variant_in_dict where {dict_key}
+  and orig_word = ?
+group by word;
+    """, (word,))
+
+def get_entry_info(conn):
+    return conn.execute("""
+with lemma_ids as (
+  select lemma_id, min(order_num) as order_num
+    from matching_entries cross join words using (word_id)
+   group by lemma_id)
+select lemma, lemmas.base_pos, pos_class, defn_note, usage_note
+  from lemma_ids l
+  join lemmas using (lemma_id)
+  join base_poses bp using (base_pos)
+ order by l.order_num, lemma, defn_note, bp.order_num, pos_class
+    """)
+
+def format_lemma_info(lemma, base_pos, pos_class, defn_note, usage_note):
+    out = lemma
+    if base_pos and pos_class:
+        out += f' <{base_pos}/{pos_class}>'
+    elif base_pos:
+        out += f' <{base_pos}>'
+    if defn_note:
+        out += f' {{{defn_note}}}'
+    if usage_note:
+        out += f' ({usage_note})'
+    return out
 
 def build_rows(conn, dict_key):
     proc(conn, dict_key)
     esdb_exact = {w for w, in conn.execute("select orig_word from in_esdb where exact group by orig_word")}
-    larger_dict = LARGER_DICT.get(dict_key)
-    if larger_dict:
-        larger_dict_set = {w for w, in conn.execute(f"select orig_word from exact where {larger_dict}")}
+    larger_key = DICTS[dict_key].larger
+    if larger_key:
+        larger_dict = {w for w, in conn.execute(f"select orig_word from exact where {larger_key}")}
     else:
-        larger_dict_set = set()
+        larger_dict = set()
     rows = []
-    dict_display = DICTS[dict_key]
-    for status, word in conn.execute("select status, word from status order by word"):
-        cols = [word]
-        if status == '-':
-            cols.append(f'in {dict_display}')
-        elif status == '!':
-            cols.append('filtered')
-        else:
-            cols.append('missing')
-
+    dict_display = DICTS[dict_key].name
+    conn.execute("create temp table matching_entries (word_id integer primary key, order_num integer not null)")
+    for code, word in conn.execute("select status, word from status order by word"):
+        conn.execute("delete from matching_entries")
         notes = []
-        if status in ('!', '+','v','o') and word in larger_dict_set:
-            notes.append(f'in {DICTS[larger_dict]}')
-
-        if status == '+':
-            if word not in larger_dict_set and word in esdb_exact:
-                notes.append('in ESDB')
-        elif status == 'v':
-            notes.append('variant')
-        elif status == '~':
-            notes.append('inexact match found')
+        def check_larger(msg):
+            if word not in larger_dict: return False
+            notes.append(msg.format(DICTS[larger_key].name))
+            conn.execute(f"insert or ignore into matching_entries select word_id, 2 from exact where {larger_key} and orig_word = ?", (word,))
+            return True
+        def check_esdb(msg):
+            if word not in esdb_exact: return False
+            notes.append(msg)
+            conn.execute("insert or ignore into matching_entries select word_id, 2 from in_esdb where exact and orig_word = ?", (word,))
+            return True
+        if code == '-':
+            status = f'in {dict_display}'
+            conn.execute(f"insert or ignore into matching_entries select word_id, 1 from exact where {dict_key} and orig_word = ?", (word,))
+        elif code == '!':
+            status = 'filtered'
             if word in larger_dict:
-                notes.append(f'exact match in {DICTS[larger_dict]}')
-            elif word in esdb_exact:
-                notes.append('exact match in ESDB')
-        elif status == 'o':
-            notes.append('missing form')
+                notes.append(f'(in {DICTS[larger_key].name})')
+            conn.execute(f"insert or ignore into matching_entries select word_id, 1 from filtered where {dict_key} and orig_word = ?", (word,))
+        elif code == '~':
+            status = 'missing'
+            notes.append('inexact match found')
+            conn.execute(f"insert or ignore into matching_entries select word_id, 1 from inexact where {dict_key} and orig_word = ?", (word,))
+            check_larger('exact match in {}') or check_esdb('exact match in ESDB')
+        elif code == 'v':
+            status = 'missing'
+            matching_entries = set()
+            if not matching_entries:
+                for word_ids, variant_level, nv_word in nv_word_variant(conn, dict_key, word):
+                    notes.append(f'{VARIANTS[variant_level]} of “{nv_word}”')
+                    matching_entries |= set(map(int, word_ids.split(',')))
+            if not matching_entries:
+                lookup_order = DICTS[dict_key].lookup_order
+                for word_ids, spellings, nv_word in nv_word_other(conn, dict_key, word):
+                    spellings = spellings.split(',')
+                    spelling = next((sp for sp in lookup_order if sp in spellings), None)
+                    notes.append(f"{SPELLINGS.get(spelling,'alternative')} spelling of “{nv_word}”")
+                    matching_entries |= set(map(int, word_ids.split(',')))
+            if not matching_entries:  # fallback
+                for words_ids, nv_word in nv_word_all(conn, dict_key, word):
+                    notes.append(f'variant of {nv_word}')
+                    matching_entries |= set(map(int, words_ids.split(',')))
+            conn.executemany("insert into matching_entries values (?, 1)", ((id,) for id in matching_entries))
+            check_larger('in {}')
+        elif code == 'o':
+            status = 'missing'
+            for is_lemma, is_plural in missing_form(conn, dict_key, word):
+                if is_lemma:
+                    notes.append('inflected forms found, lemma missing')
+                elif is_plural:
+                    notes.append('noun found, plural missing')
+                else:
+                    notes.append('lemma found, inflected form missing')
+            conn.execute(f"insert or ignore into matching_entries select word_id, 1 from other_form_in_dict_info where {dict_key} and word = ?", (word,))
+            check_larger('in {}')
+        elif code == '+':
+            status = 'missing'
+            check_larger('in {}') or check_esdb('in ESDB')
 
-        cols.append(TableCell(';<br>'.join(escape(line) for line in notes)))
-        rows.append(cols)
+        entries_class = None if code == '-' else 'entries-filtered' if code == '!' else 'entries-other'
+        entry_lines = [format_lemma_info(*r) for r in get_entry_info(conn)]
+        if entries_class == 'entries-other':
+            entry_lines = [f"({line})" for line in entry_lines]
+        entries_cell = TableCell('<br>'.join(escape(line) for line in entry_lines), entries_class)
+        rows.append([word, status,
+                     TableCell(';<br>'.join(escape(line) for line in notes)),
+                     entries_cell])
     return rows
 
 def main():
@@ -133,8 +252,6 @@ def main():
     if dict_name not in DICTS:
         print(f"Unknown dict '{dict_name}'. Valid: {', '.join(sorted(DICTS))}", file=sys.stderr)
         sys.exit(1)
-
-    conn = sqlite3.connect('file:scowl.db?mode=ro', uri=True)
 
     init(conn)
 
@@ -155,10 +272,17 @@ if __name__ == '__main__':
     main()
     sys.exit(0)
 else:
+    conn.close()
+    del conn
+
     app = Flask(__name__)
 
     with open('style.css') as f:
-        INLINE_STYLE = f'<style>\n{f.read()}</style>'
+        INLINE_STYLE = f'''<style>
+{f.read()}
+.entries-filtered {{ text-decoration: line-through; }}
+.entries-other {{ color: gray; }}
+</style>'''
 
     GIT_VER = subprocess.run(
         ['git', 'log', '--pretty=format:%cd [%h]', '-n', '1'],
@@ -192,7 +316,7 @@ Use this tool to lookup if a list of words is in an official ESDB created spelle
 <textarea name="words" rows=40 cols=30>
 </textarea>
 <br>
-{make_option_list('dict', 'en_US', DICTS.keys(), DICTS)}
+{make_option_list('dict', 'en_US', DICTS.keys(), {k: v.name for k, v in DICTS.items()})}
 <button type="submit">Submit</button>
 </form>
 <p style="color: #808080;">
@@ -214,7 +338,8 @@ def render_error(bad_lines):
 
 def render_cell(value):
     if isinstance(value, TableCell):
-        return Markup(f'<td>{value.body}</td>')
+        attr = f' class="{value.css_class}"' if value.css_class else ''
+        return Markup(f'<td{attr}>{value.body}</td>')
     return Markup(f'<td>{escape(value)}</td>')
 
 
@@ -224,11 +349,12 @@ def render_result(dict_display, rows, skipped):
         items = ''.join(f'<li>{escape(w)}</li>' for w in skipped)
         warn_html = f'<p>Skipped invalid word(s):</p><ul>{items}</ul>\n'
     tbody = ''.join(
-        Markup(f'<tr>{render_cell(word)}{render_cell(status)}{render_cell(notes)}</tr>')
-        for word, status, notes in rows
+        Markup(f'<tr>{render_cell(word)}{render_cell(status)}'
+               f'{render_cell(notes)}{render_cell(entries)}</tr>')
+        for word, status, notes, entries in rows
     )
     table = f'''<table border=1 cellpadding=2>
-<thead><tr><th>Word</th><th>Status</th><th>Notes</th></tr></thead>
+<thead><tr><th>Word</th><th>Status</th><th>Notes</th><th>Entries</th></tr></thead>
 <tbody>{tbody}</tbody>
 </table>'''
     return f'''<html>
@@ -287,7 +413,7 @@ def process_lookup(words, dict_key, skipped):
 
     rows = build_rows(conn, dict_key)
 
-    return Response(render_result(DICTS[dict_key], rows, skipped),
+    return Response(render_result(DICTS[dict_key].name, rows, skipped),
                     content_type='text/html; charset=UTF-8')
 
 
