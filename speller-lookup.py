@@ -400,21 +400,22 @@ def render_result(dict_display, rows, skipped):
 </body>'''
 
 
-def split_lines(words_raw):
-    lines = []
+def split_words(words_raw):
+    words = []
     for line in io.StringIO(words_raw):
-        line = line.strip()
-        if not line:
-            continue
-        if len(lines) >= 1000:
-            abort(400, 'Too many words: the limit is 1000')
-        lines.append(line)
-    return lines
+        for word in line.split(','):
+          word = word.strip()
+          if not word:
+              continue
+          if len(words) >= 1000:
+              abort(400, 'Too many words: the limit is 1000')
+          words.append(word)
+    return words
 
 def parse_words(words_raw):
     words = []
     skipped = []
-    for word in split_lines(words_raw):
+    for word in split_words(words_raw):
         try:
             if len(word) > 60:
                 raise ValueError
@@ -461,7 +462,7 @@ def speller_lookup():
     words, skipped = parse_words(words_raw)
 
     if request.method == 'POST' and len(words) + len(skipped) <= 5:
-        return redirect('/speller-lookup?' + urlencode(
-            [('words', '\n'.join(words + skipped)), ('dict', dict_key)]))
+        return redirect('/speller-lookup?' 
+                        + urlencode([('words', ','.join(words + skipped)), ('dict', dict_key)],safe=','))
 
     return process_lookup(words, dict_key, skipped)
