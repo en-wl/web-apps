@@ -304,6 +304,7 @@ else:
     with open('style.css') as f:
         INLINE_STYLE = f'''<style>
 {f.read()}
+table             {{ line-height: 100%; }}
 .mod-what         {{ font-weight: bold; }}
 .mod-in           {{ font-weight: bold; }}
 .word-default     {{ font-weight: bold; }}
@@ -332,7 +333,8 @@ def make_option_list(name, default, keys, values):
     return Markup('\n'.join(parts))
 
 def render_form():
-    return f'''<html>
+    return f'''<!DOCTYPE html>
+<html>
 <head>
 <title>ESDB Speller Dict Lookup</title>
 {INLINE_STYLE}
@@ -355,7 +357,8 @@ Use this tool to lookup if a list of words is in an <a href="https://wordlist.as
 def render_error(bad_lines):
     items = ''.join(f'<li>{escape(w)}</li>' for w in bad_lines)
     body = f'<p>Invalid word(s):</p><ul>{items}</ul>' if bad_lines else '<p>No valid words provided.</p>'
-    return f'''<html>
+    return f'''<!DOCTYPE html>
+<html>
 <head>
 <title>ESDB Speller Dict Lookup</title>
 {INLINE_STYLE}
@@ -375,17 +378,18 @@ def render_result(dict_display, rows, skipped):
     warn_html = ''
     if skipped:
         items = ''.join(f'<li>{escape(w)}</li>' for w in skipped)
-        warn_html = f'<p>Skipped invalid word(s):</p><ul>{items}</ul>\n'
+        warn_html = f'<p>Skipped invalid word(s):</p><ul>{items}</ul>'
     tbody = ''.join(
         Markup(f'<tr>{render_cell(word)}{render_cell(status)}'
-               f'{render_cell(notes)}{render_cell(entries)}</tr>')
+               f'{render_cell(notes)}{render_cell(entries)}</tr>\n')
         for word, status, notes, entries in rows
     )
     table = f'''<table border=1 cellpadding=3>
 <thead><tr><th>Word</th><th>Status</th><th>Notes</th><th>Entries Found</th></tr></thead>
 <tbody>{tbody}</tbody>
 </table>'''
-    return f'''<html>
+    return f'''<!DOCTYPE html>
+<html>
 <head>
 <title>ESDB Speller Dict Lookup</title>
 {INLINE_STYLE}
@@ -394,7 +398,8 @@ def render_result(dict_display, rows, skipped):
 <p>
 <a href="/speller-lookup">ESDB Speller Dict Lookup</a> results for <b>{escape(dict_display)}</b>:
 </p>
-{warn_html}{table}
+{warn_html}
+{table}
 <p style="color: #808080;">
 {GIT_VER}
 </body>'''

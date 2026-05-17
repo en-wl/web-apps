@@ -362,7 +362,8 @@ def render_form(defaults):
     special_defaults = preset.get('special', list(SPECIALS.keys()))
     special_html = make_check_list('special', special_defaults, list(SPECIALS.keys()), SPECIALS)
 
-    return f'''<html>
+    return f'''<!DOCTYPE html>
+<html>
 <head>
 <title>ESDB Custom List/Dictionary Creator</title>
 {INLINE_STYLE}
