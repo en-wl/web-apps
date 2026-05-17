@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 from flask import Flask, request, Response, abort, redirect
-from urllib.parse import urlencode
+from urllib.parse import urlencode, quote as urlescape
 from markupsafe import Markup, escape
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,15 +21,21 @@ from libscowl import clusterKey, validateWord
 
 # BOTH A COMMAND LINE AND FLASK APP
 
-# test flash app with:
-#   flask --app speller-lookup run -p 5000
+# Command line usage:
+#   ./speller-lookup.py DB DICT < WORDLIST
+
+# Flask app test:
+#   flask --debug --app speller-lookup run -p 5000
 #   http://127.0.0.1:5000/speller-lookup
+
+DB_PATH = 'scowl.db'
+if __name__ == '__main__' and len(sys.argv) > 1:
+    DB_PATH=sys.argv[1]
+DB_PATH=f"file:{urlescape(DB_PATH, safe='/')}?mode=ro"
 
 # Used for startup of flask app and then deleted, each thread has it's own connection
 # connection reused for command line app
-conn = sqlite3.connect('file:scowl.db?mode=ro', uri=True)
-
-DB_PATH = 'scowl.db'
+conn = sqlite3.connect(DB_PATH, uri=True)
 
 DictInfo = namedtuple('DictInfo', ['name', 'larger', 'spellings', 'lookup_order'])
 
@@ -115,7 +121,7 @@ with
     select word_id, spelling, variant_level, min(variant_level) over () as min_variant_level, nv_word
       from variant_in_dict_info
      where word = ? and nv_spelling in {DICTS[dict_key].spellings} and {dict_key})
-select group_concat(distinct word_id) as words_ids, group_concat(distinct spelling) as spellings, nv_word
+select group_concat(distinct word_id) as words_ids, variant_level, group_concat(distinct spelling) as spellings, nv_word
   from annotated
  where variant_level = min_variant_level
 group by nv_word;
@@ -182,9 +188,9 @@ def build_rows(conn, dict_key):
             state, hash, date, tag = add_remove
             date_str = datetime.fromisoformat(date).date()
             hash_url = f'https://github.com/en-wl/wordlist/commit/{hash}'
-            note = Markup(f'<b>{"added" if state == "add" else "removed"}</b>')
+            note = Markup(f'<span class=mod-what>{"added" if state == "add" else "removed"}</span>')
             if tag:
-                note += Markup(f' <b>in {escape(tag)}</b>')
+                note += Markup(f' <span class=mod-in>in {escape(tag)}</span>')
             note += Markup(f' on {escape(str(date_str))} (<a href="{escape(hash_url)}">{escape(hash[:7])}</a>)')
             notes.append(note)
         def check_larger(msg):
@@ -219,10 +225,11 @@ def build_rows(conn, dict_key):
                     matching_entries |= set(map(int, word_ids.split(',')))
             if not matching_entries:
                 lookup_order = DICTS[dict_key].lookup_order
-                for word_ids, spellings, nv_word in nv_word_other(conn, dict_key, word):
+                for word_ids, variant_level, spellings, nv_word in nv_word_other(conn, dict_key, word):
                     spellings = spellings.split(',')
                     spelling = next((sp for sp in lookup_order if sp in spellings), None)
-                    notes.append(f"{SPELLINGS.get(spelling,'alternative')} spelling of “{nv_word}”")
+                    what = 'spelling' if variant_level < 4 else 'variant'
+                    notes.append(f"{SPELLINGS.get(spelling,'alternative')} {what} of “{nv_word}”")
                     matching_entries |= set(map(int, word_ids.split(',')))
             if not matching_entries:  # fallback
                 for words_ids, nv_word in nv_word_all(conn, dict_key, word):
@@ -245,6 +252,11 @@ def build_rows(conn, dict_key):
             status = 'missing'
             check_larger('in {}') or check_esdb('in ESDB')
 
+        word = TableCell(word, 'word-default')
+
+        if status == 'missing':
+            status = TableCell(status, 'status-missing')
+
         entries_class = None if code == '-' else 'entries-filtered' if code == '!' else 'entries-other'
         entry_lines = [format_lemma_info(*r) for r in get_entry_info(conn)]
         if entries_class == 'entries-other':
@@ -256,11 +268,11 @@ def build_rows(conn, dict_key):
     return rows
 
 def main():
-    if len(sys.argv) != 2:
-        print(f"Usage: {sys.argv[0]} <dict_name>", file=sys.stderr)
+    if len(sys.argv) != 3:
+        print(f"Usage: {sys.argv[0]} <database> <dict_name>", file=sys.stderr)
         sys.exit(1)
 
-    dict_name = sys.argv[1].replace('-', '_')
+    dict_name = sys.argv[2].replace('-', '_')
     if dict_name not in DICTS:
         print(f"Unknown dict '{dict_name}'. Valid: {', '.join(sorted(DICTS))}", file=sys.stderr)
         sys.exit(1)
@@ -292,8 +304,12 @@ else:
     with open('style.css') as f:
         INLINE_STYLE = f'''<style>
 {f.read()}
+.mod-what         {{ font-weight: bold; }}
+.mod-in           {{ font-weight: bold; }}
+.word-default     {{ font-weight: bold; }}
+.status-missing   {{ font-weight: bold; }}
 .entries-filtered {{ text-decoration: line-through; }}
-.entries-other {{ color: gray; }}
+.entries-other    {{ color: gray; }}
 </style>'''
 
     GIT_VER = subprocess.run(
@@ -323,7 +339,7 @@ def render_form():
 </head>
 <body>
 <p>
-Use this tool to lookup if a list of words is in an official ESDB created speller dictionary.
+Use this tool to lookup if a list of words is in an <a href="https://wordlist.aspell.net/dicts/">official ESDB created speller dictionary</a>.
 <form method="post">
 <textarea name="words" rows=40 cols=30>
 </textarea>
@@ -361,12 +377,12 @@ def render_result(dict_display, rows, skipped):
         items = ''.join(f'<li>{escape(w)}</li>' for w in skipped)
         warn_html = f'<p>Skipped invalid word(s):</p><ul>{items}</ul>\n'
     tbody = ''.join(
-        Markup(f'<tr><td><b>{escape(word)}</b></td><td>{escape(status)}</td>'
+        Markup(f'<tr>{render_cell(word)}{render_cell(status)}'
                f'{render_cell(notes)}{render_cell(entries)}</tr>')
         for word, status, notes, entries in rows
     )
     table = f'''<table border=1 cellpadding=3>
-<thead><tr><th>Word</th><th>Status</th><th>Notes</th><th>Entries</th></tr></thead>
+<thead><tr><th>Word</th><th>Status</th><th>Notes</th><th>Entries Found</th></tr></thead>
 <tbody>{tbody}</tbody>
 </table>'''
     return f'''<html>
@@ -375,7 +391,9 @@ def render_result(dict_display, rows, skipped):
 {INLINE_STYLE}
 </head>
 <body>
-<p>Results for <b>{escape(dict_display)}</b>:</p>
+<p>
+<a href="/speller-lookup">ESDB Speller Dict Lookup</a> results for <b>{escape(dict_display)}</b>:
+</p>
 {warn_html}{table}
 <p style="color: #808080;">
 {GIT_VER}
@@ -416,7 +434,7 @@ def parse_words(words_raw):
 
 
 def process_lookup(words, dict_key, skipped):
-    conn = sqlite3.connect('file:scowl.db?mode=ro', uri=True)
+    conn = sqlite3.connect(DB_PATH, uri=True)
     init(conn)
 
     for word in words:
