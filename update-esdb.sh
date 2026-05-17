@@ -15,3 +15,4 @@ $GIT_UPDATE origin/v2
 make scowl.db
 cd ..
 
+./make_dicts_table.py

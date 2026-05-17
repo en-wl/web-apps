@@ -21,12 +21,12 @@ echo "*** copying into place and restarting web-app(s)"
 cd /opt/wl-web-app
 rm -rf git-old
 
-systemctl stop wl-web-app-create
+systemctl stop wl-web-app-create wl-web-app-speller-lookup
 
 mv git git-old
 mv git-new git
 
-systemctl start wl-web-app-create
+systemctl start wl-web-app-create wl-web-app-speller-lookup
 
 echo "*** done"
 
