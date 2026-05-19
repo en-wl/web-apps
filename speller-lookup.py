@@ -163,6 +163,7 @@ def format_lemma_info(lemma, base_pos, pos_class, defn_note, usage_note):
 
 def build_rows(conn, dict_key):
     proc(conn, dict_key)
+    conn.execute("attach database 'history.db' as history")
     esdb_exact = {w for w, in conn.execute("select orig_word from in_esdb where exact group by orig_word")}
     larger_key = DICTS[dict_key].larger
     if larger_key:
@@ -175,6 +176,17 @@ def build_rows(conn, dict_key):
     for code, word in conn.execute("select status, word from status order by word"):
         conn.execute("delete from matching_entries")
         notes = []
+        add_remove = next(conn.execute("select current_state, hash, author_date, release_tag from word_state where dict=? and word = ?", 
+                                       (DICTS[dict_key].name, word)), None)
+        if add_remove:
+            state, hash, date, tag = add_remove
+            date_str = datetime.fromisoformat(date).date()
+            hash_url = f'https://github.com/en-wl/wordlist/commit/{hash}'
+            note = Markup(f'<b>{"added" if state == "add" else "removed"}</b>')
+            if tag:
+                note += Markup(f' <b>in {escape(tag)}</b>')
+            note += Markup(f' on {escape(str(date_str))} (<a href="{escape(hash_url)}">{escape(hash[:7])}</a>)')
+            notes.append(note)
         def check_larger(msg):
             if word not in larger_dict: return False
             notes.append(msg.format(DICTS[larger_key].name))
@@ -239,7 +251,7 @@ def build_rows(conn, dict_key):
             entry_lines = [f"({line})" for line in entry_lines]
         entries_cell = TableCell('<br>'.join(escape(line) for line in entry_lines), entries_class)
         rows.append([word, status,
-                     TableCell(';<br>'.join(escape(line) for line in notes)),
+                     TableCell(Markup(';<br>').join(escape(line) for line in notes)),
                      entries_cell])
     return rows
 
@@ -349,11 +361,11 @@ def render_result(dict_display, rows, skipped):
         items = ''.join(f'<li>{escape(w)}</li>' for w in skipped)
         warn_html = f'<p>Skipped invalid word(s):</p><ul>{items}</ul>\n'
     tbody = ''.join(
-        Markup(f'<tr>{render_cell(word)}{render_cell(status)}'
+        Markup(f'<tr><td><b>{escape(word)}</b></td><td>{escape(status)}</td>'
                f'{render_cell(notes)}{render_cell(entries)}</tr>')
         for word, status, notes, entries in rows
     )
-    table = f'''<table border=1 cellpadding=2>
+    table = f'''<table border=1 cellpadding=3>
 <thead><tr><th>Word</th><th>Status</th><th>Notes</th><th>Entries</th></tr></thead>
 <tbody>{tbody}</tbody>
 </table>'''
