@@ -484,6 +484,15 @@ def create():
         if s not in SPECIALS:
             abort(400, f'Invalid special: {s}')
 
+    if download == 'wordlist':
+        encoding = request.args.get('encoding', 'utf-8')
+        if encoding not in ('utf-8', 'iso-8859-1'):
+            abort(400, 'Invalid encoding')
+
+        fmt = request.args.get('format', 'inline')
+        if fmt not in ('inline', 'tar.gz', 'zip'):
+            abort(400, 'Invalid format')
+
     # Map to libscowl args
     lc_spellings = [SPELLING_MAP[s] for s in parms['spelling']]
     categories = libscowl.Include(*parms['special'])
@@ -554,15 +563,6 @@ def create():
         return Response(tar_bytes,
                         content_type='application/octet-stream',
                         headers={'Content-Disposition': 'attachment; filename=aspell6-en-custom.tar.bz2'})
-
-    # wordlist-specific parms
-    encoding = request.args.get('encoding', 'utf-8')
-    if encoding not in ('utf-8', 'iso-8859-1'):
-        abort(400, 'Invalid encoding')
-
-    fmt = request.args.get('format', 'inline')
-    if fmt not in ('inline', 'tar.gz', 'zip'):
-        abort(400, 'Invalid format')
 
     # Build response
     charset = 'UTF-8' if encoding == 'utf-8' else 'ISO-8859-1'
