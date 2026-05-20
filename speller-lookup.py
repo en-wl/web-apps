@@ -110,10 +110,10 @@ def nv_word_variant(conn, dict_key, word):
     return conn.execute(f"""
 with
   annotated as (
-    select word_id, variant_level, min(variant_level) over () as min_variant_level, nv_word
+    select variant_level, min(variant_level) over () as min_variant_level, nv_word_id, nv_word
       from variant_in_dict_info
      where word = ? and spelling = nv_spelling and nv_spelling in {DICTS[dict_key].spellings} and {dict_key})
-select group_concat(distinct word_id) as word_ids, min(variant_level) as variant_level, nv_word
+select min(variant_level) as variant_level, group_concat(distinct nv_word_id) as nv_word_ids, nv_word
   from annotated
  where variant_level = min_variant_level
 group by nv_word;
@@ -123,10 +123,10 @@ def nv_word_other(conn, dict_key, word):
     return conn.execute(f"""
 with
   annotated as (
-    select word_id, spelling, variant_level, min(variant_level) over () as min_variant_level, nv_word
+    select spelling, variant_level, min(variant_level) over () as min_variant_level, nv_word_id, nv_word
       from variant_in_dict_info
      where word = ? and nv_spelling in {DICTS[dict_key].spellings} and {dict_key})
-select group_concat(distinct word_id) as words_ids, variant_level, group_concat(distinct spelling) as spellings, nv_word
+select variant_level, group_concat(distinct spelling) as spellings, group_concat(distinct nv_word_id) as nv_word_ids, nv_word
   from annotated
  where variant_level = min_variant_level
 group by nv_word;
@@ -141,7 +141,7 @@ select distinct word_id = lemma_id as is_lemma, pos == 'ns' as is_plural
 
 def nv_word_all(conn, dict_key, word):
     return conn.execute(f"""
-select group_concat(distinct word_id) as words_ids, word
+select group_concat(distinct word_id) as nv_words_ids, word
   from variant_in_dict where {dict_key}
   and orig_word = ?
 group by word;
@@ -150,17 +150,17 @@ group by word;
 def get_entry_info(conn):
     return conn.execute("""
 with lemma_ids as (
-  select lemma_id, min(order_num) as order_num
+  select lemma_id, min(order_num) as order_num, css_class
     from matching_entries cross join words using (word_id)
    group by lemma_id)
-select lemma, lemmas.base_pos, pos_class, defn_note, usage_note
+select lemma, lemmas.base_pos, pos_class, defn_note, usage_note, css_class
   from lemma_ids l
   join lemmas using (lemma_id)
   join base_poses bp using (base_pos)
  order by l.order_num, lemma, defn_note, bp.order_num, pos_class
     """)
 
-def format_lemma_info(lemma, base_pos, pos_class, defn_note, usage_note):
+def format_lemma_info(lemma, base_pos, pos_class, defn_note, usage_note, css_class):
     out = lemma
     if base_pos and pos_class:
         out += f' <{base_pos}/{pos_class}>'
@@ -170,7 +170,10 @@ def format_lemma_info(lemma, base_pos, pos_class, defn_note, usage_note):
         out += f' {{{defn_note}}}'
     if usage_note:
         out += f' ({usage_note})'
-    return out
+    if css_class == 'other':
+        return Markup(f'<span class=entry-other>({escape(out)})</span>')
+    else:
+        return Markup(f'<span class=entry-{css_class}>{escape(out)}</span>')
 
 def build_rows(conn, dict_key):
     proc(conn, dict_key)
@@ -185,11 +188,11 @@ def build_rows(conn, dict_key):
     footnotes = set()
     poses_used = set()
     dict_display = DICTS[dict_key].name
-    conn.execute("create temp table matching_entries (word_id integer primary key, order_num integer not null)")
+    conn.execute("create temp table matching_entries (word_id integer primary key, order_num integer not null, css_class text not null)")
     for code, word in conn.execute("select status, word from status order by word"):
         conn.execute("delete from matching_entries")
         notes = []
-        add_remove = next(conn.execute("select current_state, hash, author_date, release_tag from word_state where dict=? and word = ?", 
+        add_remove = next(conn.execute("select current_state, hash, author_date, release_tag from word_state where dict=? and word = ?",
                                        (DICTS[dict_key].name, word)), None)
         if add_remove:
             state, hash, date, tag = add_remove
@@ -203,46 +206,46 @@ def build_rows(conn, dict_key):
         def check_larger(msg):
             if word not in larger_dict: return False
             notes.append(msg.format(DICTS[larger_key].name))
-            conn.execute(f"insert or ignore into matching_entries select word_id, 2 from exact where {larger_key} and orig_word = ?", (word,))
+            conn.execute(f"insert or ignore into matching_entries select word_id, 2, 'other' from exact where {larger_key} and orig_word = ?", (word,))
             return True
         def check_esdb(msg):
             if word not in esdb_exact: return False
             notes.append(msg)
-            conn.execute("insert or ignore into matching_entries select word_id, 2 from in_esdb where exact and orig_word = ?", (word,))
+            conn.execute("insert or ignore into matching_entries select word_id, 2, 'other' from in_esdb where exact and orig_word = ?", (word,))
             return True
         if code == '-':
             status = f'in {dict_display}'
-            conn.execute(f"insert or ignore into matching_entries select word_id, 1 from exact where {dict_key} and orig_word = ?", (word,))
+            conn.execute(f"insert or ignore into matching_entries select word_id, 1, 'match' from exact where {dict_key} and orig_word = ?", (word,))
         elif code == '!':
             status = 'filtered'
             if word in larger_dict:
                 notes.append(f'(in {DICTS[larger_key].name})')
-            conn.execute(f"insert or ignore into matching_entries select word_id, 1 from filtered where {dict_key} and orig_word = ?", (word,))
+            conn.execute(f"insert or ignore into matching_entries select word_id, 1, 'filtered' from filtered where {dict_key} and orig_word = ?", (word,))
         elif code == '~':
             status = 'missing'
-            notes.append('inexact match found')
-            conn.execute(f"insert or ignore into matching_entries select word_id, 1 from inexact where {dict_key} and orig_word = ?", (word,))
+            notes.append(f'inexact match found in {dict_display}')
+            conn.execute(f"insert or ignore into matching_entries select word_id, 1, 'approx' from inexact where {dict_key} and orig_word = ?", (word,))
             check_larger('exact match in {}') or check_esdb('exact match in ESDB')
         elif code == 'v':
             status = 'missing'
-            matching_entries = set()
-            if not matching_entries:
-                for word_ids, variant_level, nv_word in nv_word_variant(conn, dict_key, word):
+            approx_entries = set()
+            if not approx_entries:
+                for variant_level, nv_word_ids, nv_word in nv_word_variant(conn, dict_key, word):
                     notes.append(f'{VARIANTS[variant_level]} of “{nv_word}”')
-                    matching_entries |= set(map(int, word_ids.split(',')))
-            if not matching_entries:
+                    approx_entries |= set(map(int, nv_word_ids.split(',')))
+            if not approx_entries:
                 lookup_order = DICTS[dict_key].lookup_order
-                for word_ids, variant_level, spellings, nv_word in nv_word_other(conn, dict_key, word):
+                for variant_level, spellings, nv_word_ids, nv_word in nv_word_other(conn, dict_key, word):
                     spellings = spellings.split(',')
                     spelling = next((sp for sp in lookup_order if sp in spellings), None)
                     what = 'spelling' if variant_level < 4 else 'variant'
                     notes.append(f"{SPELLINGS.get(spelling,'alternative')} {what} of “{nv_word}”")
-                    matching_entries |= set(map(int, word_ids.split(',')))
-            if not matching_entries:  # fallback
-                for words_ids, nv_word in nv_word_all(conn, dict_key, word):
-                    notes.append(f'variant of {nv_word}')
-                    matching_entries |= set(map(int, words_ids.split(',')))
-            conn.executemany("insert into matching_entries values (?, 1)", ((id,) for id in matching_entries))
+                    approx_entries |= set(map(int, nv_word_ids.split(',')))
+            if not approx_entries:
+                for nv_word_ids, nv_word in nv_word_all(conn, dict_key, word):
+                    notes.append(f'variant of “{nv_word}”')
+                    approx_entries |= set(map(int, nv_word_ids.split(',')))
+            conn.executemany("insert into matching_entries values (?, 0, 'approx')", ((id,) for id in approx_entries))
             check_larger('in {}')
         elif code == 'o':
             status = 'missing'
@@ -253,7 +256,7 @@ def build_rows(conn, dict_key):
                     notes.append('noun found, plural missing')
                 else:
                     notes.append('lemma found, inflected form missing')
-            conn.execute(f"insert or ignore into matching_entries select word_id, 1 from other_form_in_dict_info where {dict_key} and word = ?", (word,))
+            conn.execute(f"insert or ignore into matching_entries select word_id, 1, 'approx' from other_form_in_dict_info where {dict_key} and word = ?", (word,))
             check_larger('in {}')
         elif code == '+':
             status = 'missing'
@@ -267,13 +270,10 @@ def build_rows(conn, dict_key):
         if status == 'missing':
             status = TableCell(status, 'status-missing')
 
-        entries_class = None if code == '-' else 'entries-filtered' if code == '!' else 'entries-other'
         entry_rows = list(get_entry_info(conn))
         poses_used.update(r[1] for r in entry_rows if r[1])
         entry_lines = [format_lemma_info(*r) for r in entry_rows]
-        if entries_class == 'entries-other':
-            entry_lines = [f"({line})" for line in entry_lines]
-        entries_cell = TableCell('<br>'.join(escape(line) for line in entry_lines), entries_class)
+        entries_cell = TableCell('<br>'.join(escape(line) for line in entry_lines))
         rows.append([word, status,
                      TableCell(Markup(';<br>').join(escape(line) for line in notes)),
                      entries_cell])
@@ -321,8 +321,11 @@ table             {{ line-height: 100%; }}
 .mod-in           {{ font-weight: bold; }}
 .word-default     {{ font-weight: bold; }}
 .status-missing   {{ font-weight: bold; }}
-.entries-filtered {{ text-decoration: line-through; }}
-.entries-other    {{ color: gray; }}
+.entry-match    {{ }}
+.entry-filtered {{ text-decoration: line-through; }}
+.entry-approx   {{ color: #404040; font-style: italic; }}
+.entry-other    {{ color: #808080; }}
+.error          {{ color: darkred; font-weight: bold; }}
 </style>'''
 
     GIT_VER = subprocess.run(
@@ -353,7 +356,7 @@ def render_form():
 </head>
 <body>
 <p>
-Use this tool to lookup if a list of words is in an <a href="https://wordlist.aspell.net/dicts/">official ESDB created speller dictionary</a>.  
+Use this tool to lookup if a list of words is in an <a href="https://wordlist.aspell.net/dicts/">official ESDB created speller dictionary</a>.
 Enter one word per line, entries are case sensitive.
 <form method="post">
 <textarea name="words" rows=40 cols=30>
@@ -390,8 +393,8 @@ def render_cell(value):
 def render_result(dict_display, rows, skipped, poses_used, footnotes):
     warn_html = ''
     if skipped:
-        items = ''.join(f'<li>{escape(w)}</li>' for w in skipped)
-        warn_html = f'<p>Skipped invalid word(s):</p><ul>{items}</ul>'
+        items = ', '.join(f'“{escape(w)}”' for w in skipped)
+        warn_html = f'<p class=error>Skipped invalid word(s): {items}</ul>'
     tbody = ''.join(
         Markup(f'<tr>{render_cell(word)}{render_cell(status)}'
                f'{render_cell(notes)}{render_cell(entries)}</tr>\n')
@@ -458,13 +461,12 @@ def parse_words(words_raw):
             if len(word) > 60:
                 raise ValueError
             validateWord(word)
+            words.append(word)
         except ValueError:
             skipped.append(word)
             if len(skipped) >= 3:
                 abort(Response(render_error(skipped), status=400,
                                content_type='text/html; charset=UTF-8'))
-            continue
-        words.append(word)
 
     if not words:
         abort(Response(render_error(skipped), status=400,
