@@ -64,6 +64,11 @@ VARIANTS = {
       for level, descr in conn.execute("select variant_level, variant_descr from variant_levels")
 }
 
+BASE_POSES = {
+    base_pos: descr
+      for base_pos, descr in conn.execute("select base_pos, descr from base_poses")
+}
+
 def init(conn):
     conn.execute("""create temp table input (
       word text primary key,
@@ -177,6 +182,8 @@ def build_rows(conn, dict_key):
     else:
         larger_dict = set()
     rows = []
+    footnotes = set()
+    poses_used = set()
     dict_display = DICTS[dict_key].name
     conn.execute("create temp table matching_entries (word_id integer primary key, order_num integer not null)")
     for code, word in conn.execute("select status, word from status order by word"):
@@ -254,18 +261,23 @@ def build_rows(conn, dict_key):
 
         word = TableCell(word, 'word-default')
 
+        if status == 'filtered':
+            footnotes.add('*')
+            status = Markup('filtered<sup>*</sup>')
         if status == 'missing':
             status = TableCell(status, 'status-missing')
 
         entries_class = None if code == '-' else 'entries-filtered' if code == '!' else 'entries-other'
-        entry_lines = [format_lemma_info(*r) for r in get_entry_info(conn)]
+        entry_rows = list(get_entry_info(conn))
+        poses_used.update(r[1] for r in entry_rows if r[1])
+        entry_lines = [format_lemma_info(*r) for r in entry_rows]
         if entries_class == 'entries-other':
             entry_lines = [f"({line})" for line in entry_lines]
         entries_cell = TableCell('<br>'.join(escape(line) for line in entry_lines), entries_class)
         rows.append([word, status,
                      TableCell(Markup(';<br>').join(escape(line) for line in notes)),
                      entries_cell])
-    return rows
+    return rows, poses_used, footnotes
 
 def main():
     if len(sys.argv) != 3:
@@ -341,7 +353,8 @@ def render_form():
 </head>
 <body>
 <p>
-Use this tool to lookup if a list of words is in an <a href="https://wordlist.aspell.net/dicts/">official ESDB created speller dictionary</a>.
+Use this tool to lookup if a list of words is in an <a href="https://wordlist.aspell.net/dicts/">official ESDB created speller dictionary</a>.  
+Enter one word per line, entries are case sensitive.
 <form method="post">
 <textarea name="words" rows=40 cols=30>
 </textarea>
@@ -374,7 +387,7 @@ def render_cell(value):
     return Markup(f'<td>{escape(value)}</td>')
 
 
-def render_result(dict_display, rows, skipped):
+def render_result(dict_display, rows, skipped, poses_used, footnotes):
     warn_html = ''
     if skipped:
         items = ''.join(f'<li>{escape(w)}</li>' for w in skipped)
@@ -384,6 +397,21 @@ def render_result(dict_display, rows, skipped):
                f'{render_cell(notes)}{render_cell(entries)}</tr>\n')
         for word, status, notes, entries in rows
     )
+    pos_codes_html = ''
+    poses_used.discard('')
+    if poses_used:
+        rows_html = ''.join(
+            Markup(f'<tr><td>&lt;{escape(code)}&gt;</td><td>{escape(BASE_POSES.get(code, ""))}</td></tr>')
+            for code in sorted(poses_used)
+        )
+        pos_codes_html = f'<p><table class="pos-legend">{rows_html}</table></p>'
+    footnotes_html = ''
+    if '*' in footnotes:
+        footnotes_html += f'''*
+a word that is marked as belonging to {escape(dict_display)}, but filtered out for one reason or another.
+'''
+    if footnotes_html:
+        footnotes_html = f'<p>{footnotes_html}</p>'
     table = f'''<table border=1 cellpadding=3>
 <thead><tr><th>Word</th><th>Status</th><th>Notes</th><th>Entries Found</th></tr></thead>
 <tbody>{tbody}</tbody>
@@ -400,6 +428,11 @@ def render_result(dict_display, rows, skipped):
 </p>
 {warn_html}
 {table}
+{pos_codes_html}
+{footnotes_html}
+<p>
+See the <a href="https://github.com/en-wl/wordlist/blob/v2/README.md#file-format">ESDB README</a>
+for help with interpreting the ESDB entries and the meaning of the variant levels.
 <p style="color: #808080;">
 {GIT_VER}
 </body>'''
@@ -447,9 +480,9 @@ def process_lookup(words, dict_key, skipped):
         key = clusterKey(word).decode('ascii')
         conn.execute("insert or ignore into input values (?, ?)", (word, key))
 
-    rows = build_rows(conn, dict_key)
+    rows, poses_used, footnotes = build_rows(conn, dict_key)
 
-    return Response(render_result(DICTS[dict_key].name, rows, skipped),
+    return Response(render_result(DICTS[dict_key].name, rows, skipped, poses_used, footnotes),
                     content_type='text/html; charset=UTF-8')
 
 
