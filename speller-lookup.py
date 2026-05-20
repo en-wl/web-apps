@@ -80,7 +80,7 @@ def add_word(conn, word):
     if not word:
         return
     validateWord(word)
-    key = clusterKey(word).decode('ascii')
+    key = clusterKey(word).decode('iso-8859-1')
     conn.execute("insert or ignore into input values (?, ?)", (word, key))
 
 def proc(conn, dict_name):
@@ -477,7 +477,7 @@ def process_lookup(words, dict_key, skipped):
     init(conn)
 
     for word in words:
-        key = clusterKey(word).decode('ascii')
+        key = clusterKey(word).decode('iso-8859-1')
         conn.execute("insert or ignore into input values (?, ?)", (word, key))
 
     rows, poses_used, footnotes = build_rows(conn, dict_key)
