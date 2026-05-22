@@ -493,6 +493,16 @@ def create():
         if fmt not in ('inline', 'tar.gz', 'zip'):
             abort(400, 'Invalid format')
 
+        charset = 'UTF-8' if encoding == 'utf-8' else 'ISO-8859-1'
+
+    if request.method == 'HEAD':
+        if download == 'wordlist' and fmt == 'inline':
+            resp = Response(content_type=f'text/plain; charset={charset}')
+        else:
+            resp = Response(content_type='application/octet-stream')
+        resp.automatically_set_content_length = False
+        return resp
+
     # Map to libscowl args
     lc_spellings = [SPELLING_MAP[s] for s in parms['spelling']]
     categories = libscowl.Include(*parms['special'])
@@ -565,7 +575,6 @@ def create():
                         headers={'Content-Disposition': 'attachment; filename=aspell6-en-custom.tar.bz2'})
 
     # Build response
-    charset = 'UTF-8' if encoding == 'utf-8' else 'ISO-8859-1'
     header = build_header(parms)
 
     if fmt == 'inline':
