@@ -411,7 +411,7 @@ def render_result(dict_display, rows, skipped, poses_used, footnotes):
     footnotes_html = ''
     if '*' in footnotes:
         footnotes_html += f'''*
-a word that is marked as belonging to {escape(dict_display)}, but filtered out for one reason or another.
+a word that is marked as belonging to {escape(dict_display)}, but filtered out for one reason or another
 '''
     if footnotes_html:
         footnotes_html = f'<p>{footnotes_html}</p>'
@@ -503,6 +503,6 @@ def speller_lookup():
 
     if request.method == 'POST' and len(words) + len(skipped) <= 5:
         return redirect('/speller-lookup?' 
-                        + urlencode([('words', ','.join(words + skipped)), ('dict', dict_key)],safe=','))
+                        + urlencode([('dict', dict_key), ('words', ','.join(words + skipped))],safe=','))
 
     return process_lookup(words, dict_key, skipped)

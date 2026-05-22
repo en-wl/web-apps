@@ -430,7 +430,7 @@ install even though it is unsigned.
 def create():
     download = request.args.get('download')
 
-    if not download:
+    if download is None:
         defaults = request.args.get('defaults', 'en_US')
         if defaults not in PRESETS:
             abort(400, 'Invalid defaults preset')
