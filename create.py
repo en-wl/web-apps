@@ -83,6 +83,8 @@ SPECIALS = {
     'roman-numerals': 'Roman Numerals',
 }
 
+from git_info import *
+
 with open('scowl/Copyright') as _f:
     _copyright_parts = _f.read().rstrip('\n').split('\n===')
     COPYRIGHT_BASE = _copyright_parts[0].strip('\n')
@@ -96,16 +98,6 @@ with open('scowl/Copyright') as _f:
 with open('scowl/README.md') as _f:
     README_SCOWL = _f.read()
 
-GIT_VER = subprocess.run(
-    ['git', 'log', '--pretty=format:%cd [%h]', '-n', '1'],
-    cwd='scowl', stdout=subprocess.PIPE, text=True, check=True
-).stdout.strip()
-
-GIT_HASH = subprocess.run(
-    ['git', 'rev-parse', '--short', 'HEAD'],
-    cwd='scowl', stdout=subprocess.PIPE, text=True, check=True,
-).stdout.strip()
-
 def build_header(parms):
     parms_block = (
         "Custom wordlist generated from https://app.aspell.net/create using\n"
@@ -114,7 +106,7 @@ def build_header(parms):
     ).rstrip('\n')
     parts = [parms_block,
              'https://wordlist.aspell.net',
-             f"Using Git Commit From: {GIT_VER}",
+             git_revision_str(),
              COPYRIGHT_BASE]
     if 'AU' in parms['spelling']:
         parts.append(COPYRIGHT_SECTIONS['AU'])
@@ -149,6 +141,8 @@ def locale_name(spellings_raw):
 def make_hunspell_dict(tmpdir, name, parms_str, words):
     parms_path = os.path.join(tmpdir, 'parms.txt')
     with open(parms_path, 'w') as f:
+        f.write(git_revision_str())
+        f.write("\n\n")
         f.write('With Parameters:\n')
         f.write(parms_str)
 
@@ -418,9 +412,7 @@ The extension does not contain any executable code, so it should be safe to
 install even though it is unsigned.
 <p>
 <button type="reset">Reset to Defaults</button>
-<p style="color: #808080;">
-{GIT_VER}
-<p>
+{GIT_FOOTER}
 </form>
 </body>'''
 

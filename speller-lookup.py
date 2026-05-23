@@ -328,16 +328,7 @@ table             {{ line-height: 100%; }}
 .error          {{ color: darkred; font-weight: bold; }}
 </style>'''
 
-    GIT_VER = subprocess.run(
-        ['git', 'log', '--pretty=format:%cd [%h]', '-n', '1'],
-        cwd='scowl', stdout=subprocess.PIPE, text=True, check=True
-    ).stdout.strip()
-
-    GIT_HASH = subprocess.run(
-        ['git', 'rev-parse', '--short', 'HEAD'],
-        cwd='scowl', stdout=subprocess.PIPE, text=True, check=True,
-    ).stdout.strip()
-
+    from git_info import *
 
 def make_option_list(name, default, keys, values):
     parts = [f'<select name="{escape(name)}">']
@@ -365,8 +356,7 @@ Enter one word per line, entries are case sensitive.
 {make_option_list('dict', 'en_US', DICTS.keys(), {k: v.name for k, v in DICTS.items()})}
 <button type="submit">Submit</button>
 </form>
-<p style="color: #808080;">
-{GIT_VER}
+{GIT_FOOTER}
 </body>'''
 
 
@@ -381,6 +371,7 @@ def render_error(bad_lines):
 </head>
 <body>
 {body}
+{GIT_FOOTER}
 </body>'''
 
 def render_cell(value):
@@ -436,8 +427,7 @@ a word that is marked as belonging to {escape(dict_display)}, but filtered out f
 <p>
 See the <a href="https://github.com/en-wl/wordlist/blob/v2/README.md#file-format">ESDB README</a>
 for help with interpreting the ESDB entries and the meaning of the variant levels.
-<p style="color: #808080;">
-{GIT_VER}
+{GIT_FOOTER}
 </body>'''
 
 
