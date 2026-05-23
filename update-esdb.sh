@@ -15,6 +15,8 @@ $GIT_UPDATE origin/v2
 make scowl.db
 cd ..
 
+./test_create.py -q
+
 ./make_dicts_table.py
 
 cd diff-code

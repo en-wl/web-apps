@@ -13,6 +13,8 @@ import tempfile
 import zipfile
 import libscowl
 
+from dict_params import *
+
 # test with: flask --app create run -p 5000
 # http://127.0.0.1:5000/create
 
@@ -23,20 +25,19 @@ with open('style.css') as f:
 
 DB_PATH = 'scowl.db'
 
-SPELLING_MAP = {'US': 'A', 'GBs': 'B', 'GBz': 'Z', 'CA': 'C', 'AU': 'D'}
+DISPLAY_TO_SPELLING = {'US': 'A', 'GBs': 'B', 'GBz': 'Z', 'CA': 'C', 'AU': 'D'}
+SPELLING_TO_DISPLAY = {v: k for k, v in DISPLAY_TO_SPELLING.items()}
 
 LEGACY_VARIANT_MAP = {0: 1, 1: 4, 2: 6, 3: 8}
 
 PRESETS = {
-    'en_US':       {'max_size': 60, 'spelling': ['US'],        'variant_level': 1, 'diacritic': 'strip'},
-    'en_GB-ise':   {'max_size': 60, 'spelling': ['GBs'],       'variant_level': 1, 'diacritic': 'strip'},
-    'en_GB-ize':   {'max_size': 60, 'spelling': ['GBz'],       'variant_level': 1, 'diacritic': 'strip'},
-    'en_CA':       {'max_size': 60, 'spelling': ['CA'],        'variant_level': 1, 'diacritic': 'strip'},
-    'en_AU':       {'max_size': 60, 'spelling': ['AU'],        'variant_level': 1, 'diacritic': 'strip'},
-    'en_US-large': {'max_size': 70, 'spelling': ['US'],        'variant_level': 4, 'diacritic': 'strip'},
-    'en_GB-large': {'max_size': 70, 'spelling': ['GBs','GBz'], 'variant_level': 4, 'diacritic': 'strip'},
-    'en_CA-large': {'max_size': 70, 'spelling': ['CA'],        'variant_level': 4, 'diacritic': 'strip'},
-    'en_AU-large': {'max_size': 70, 'spelling': ['AU'],        'variant_level': 4, 'diacritic': 'strip'},
+    name: {
+        'max_size':     d['size'],
+        'spelling':     [SPELLING_TO_DISPLAY[c] for c in d['spellings']],
+        'variant_level': d['variantLevel'],
+        'diacritic':    d['diacritics'],
+    }
+    for name, d in DICT_PARMS.items()
 }
 
 SIZES = {
@@ -443,7 +444,7 @@ def create():
 
     parms['spelling'] = request.args.getlist('spelling') or ['US']
     for s in parms['spelling']:
-        if s not in SPELLING_MAP:
+        if s not in DISPLAY_TO_SPELLING:
             abort(400, f'Invalid spelling: {s}')
 
     # Handle both legacy max_variant and new variant_level parameters
@@ -496,7 +497,7 @@ def create():
         return resp
 
     # Map to libscowl args
-    lc_spellings = [SPELLING_MAP[s] for s in parms['spelling']]
+    lc_spellings = [DISPLAY_TO_SPELLING[s] for s in parms['spelling']]
     categories = libscowl.Include(*parms['special'])
 
     # Generate wordlist
@@ -596,4 +597,5 @@ def create():
         return Response(buf.getvalue(),
                         content_type='application/zip',
                         headers={'Content-Disposition': 'attachment; filename=SCOWL-wl.zip'})
+
 
