@@ -30,7 +30,27 @@ rm -rf git-old
 mv git git-old
 mv git-new git
 
-systemctl start wl-web-app-create wl-web-app-speller-lookup
+systemctl start wl-web-app-create wl-web-app-speller-lookup || true
+
+sleep 5
+
+ok=1
+for svc in wl-web-app-create wl-web-app-speller-lookup; do
+  state=$(systemctl show -p ActiveState --value "$svc")
+  if [ "$state" != "active" ]; then
+    echo "*** $svc not active after start: ActiveState=$state"
+    ok=0
+  fi
+done
+
+if [ "$ok" -ne 1 ]; then
+  echo "*** rolling back to previous version"
+  systemctl stop wl-web-app-create wl-web-app-speller-lookup || true
+  mv git git-new
+  mv git-old git
+  systemctl start wl-web-app-create wl-web-app-speller-lookup
+  exit 1
+fi
 
 echo "*** done"
 
