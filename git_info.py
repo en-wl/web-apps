@@ -17,6 +17,6 @@ def git_revision_str(sep='\n'):
             f"App Git Revision: {APP_GIT_VER}")
 
 GIT_FOOTER = f"""<p class=git-revision>
-{git_revision_str('; ')}
+{GIT_VER} (ESDB); {APP_GIT_VER} (App)
 <p>
 """
