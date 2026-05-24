@@ -51,6 +51,9 @@ DICTS = {
     'en_AU_large': DictInfo('en_AU-large', None,          "('_','D')", 'BZAC'),
 }
 
+def colName(name):
+    return name.replace('-','_')
+
 SPELLINGS = {
     'A': 'American',
     'B': 'British',
@@ -83,7 +86,7 @@ def add_word(conn, word):
     key = clusterKey(word).decode('iso-8859-1')
     conn.execute("insert or ignore into input values (?, ?)", (word, key))
 
-def proc(conn, dict_name):
+def proc(conn, dict_key):
     with open('speller-lookup.sql') as f:
         conn.executescript(f.read())
 
@@ -97,7 +100,7 @@ def proc(conn, dict_name):
                                ('v', 'variant_in_dict'),
                                ('o', 'other_form_in_dict'),
                                ('~', 'inexact')]:
-        conn.execute(f"insert or ignore into status select orig_word, ? from {table} where {dict_name}",
+        conn.execute(f"insert or ignore into status select orig_word, ? from {table} where {dict_key}",
                      (status_code,))
     conn.execute("insert or ignore into status select word, '+' from input")
 
@@ -284,9 +287,10 @@ def main():
         print(f"Usage: {sys.argv[0]} <database> <dict_name>", file=sys.stderr)
         sys.exit(1)
 
-    dict_name = sys.argv[2].replace('-', '_')
-    if dict_name not in DICTS:
-        print(f"Unknown dict '{dict_name}'. Valid: {', '.join(sorted(DICTS))}", file=sys.stderr)
+    dict_name = sys.argv[2]
+    dict_key = colName(dict_name)
+    if dict_key not in DICTS:
+        print(f"Unknown dict '{dict_name}'. Valid: {', '.join(d.name for d in DICTS.values())}", file=sys.stderr)
         sys.exit(1)
 
     init(conn)
@@ -299,7 +303,7 @@ def main():
             print(f"Warning: skipping invalid word: {word!r}", file=sys.stderr)
             continue
 
-    proc(conn, dict_name)
+    proc(conn, dict_key)
 
     for status, word in conn.execute("select status, word from status order by word"):
         print(f"{status} {word}")
@@ -338,7 +342,8 @@ def make_option_list(name, default, keys, values):
     parts.append('</select>')
     return Markup('\n'.join(parts))
 
-def render_form():
+def render_form(default='en_US'):
+    dicts = {v.name: v.name for k, v in DICTS.items()}
     return f'''<!DOCTYPE html>
 <html>
 <head>
@@ -349,11 +354,11 @@ def render_form():
 <p>
 Use this tool to lookup if a list of words is in an <a href="https://wordlist.aspell.net/dicts/">official ESDB created speller dictionary</a>.
 Enter one word per line, entries are case sensitive.
-<form method="post">
+<form method="post" action="/speller-lookup">
 <textarea name="words" rows=40 cols=30>
 </textarea>
 <br>
-{make_option_list('dict', 'en_US', DICTS.keys(), {k: v.name for k, v in DICTS.items()})}
+{make_option_list('dict', DICTS[default].name, dicts.keys(), dicts)}
 <button type="submit">Submit</button>
 </form>
 {GIT_FOOTER}
@@ -477,22 +482,26 @@ def process_lookup(words, dict_key, skipped):
     return Response(render_result(DICTS[dict_key].name, rows, skipped, poses_used, footnotes),
                     content_type='text/html; charset=UTF-8')
 
-
 @app.route('/speller-lookup', methods=['GET', 'POST'])
 def speller_lookup():
     if not request.values:
         return Response(render_form(), content_type='text/html; charset=UTF-8')
 
-    words_raw = request.values.get('words', '')
-    dict_key = request.values.get('dict', 'en_US')
+    words_raw = request.values.get('words', None)
+    dict_name = request.values.get('dict', '')
+
+    dict_key = colName(dict_name)
 
     if dict_key not in DICTS:
-        abort(400, 'Invalid dict')
+        abort(400, 'Invalid or missing dict')
+
+    if words_raw is None:
+        return Response(render_form(dict_key), content_type='text/html; charset=UTF-8')
 
     words, skipped = parse_words(words_raw)
 
     if request.method == 'POST' and len(words) + len(skipped) <= 5:
-        return redirect('/speller-lookup?' 
-                        + urlencode([('dict', dict_key), ('words', ','.join(words + skipped))],safe=','))
+        return redirect('/speller-lookup?'
+                        + urlencode([('dict', dict_name), ('words', ','.join(words + skipped))],safe=','))
 
     return process_lookup(words, dict_key, skipped)
