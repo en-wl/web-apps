@@ -484,11 +484,17 @@ def process_lookup(words, dict_key, skipped):
 
 @app.route('/speller-lookup', methods=['GET', 'POST'])
 def speller_lookup():
-    if not request.values:
+    try:
+        args = request.values
+    except Exception:
+        # to catch decoding and other errors
+        abort(400, 'Invalid query string')
+
+    if not args:
         return Response(render_form(), content_type='text/html; charset=UTF-8')
 
-    words_raw = request.values.get('words', None)
-    dict_name = request.values.get('dict', '')
+    words_raw = args.get('words', None)
+    dict_name = args.get('dict', '')
 
     dict_key = colName(dict_name)
 
