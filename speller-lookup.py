@@ -480,7 +480,8 @@ def process_lookup(words, dict_key, skipped):
     rows, poses_used, footnotes = build_rows(conn, dict_key)
 
     return Response(render_result(DICTS[dict_key].name, rows, skipped, poses_used, footnotes),
-                    content_type='text/html; charset=UTF-8')
+                    content_type='text/html; charset=UTF-8',
+                    headers={'X-Robots-Tag': 'noindex'})
 
 @app.route('/speller-lookup', methods=['GET', 'POST'])
 def speller_lookup():
@@ -502,7 +503,9 @@ def speller_lookup():
         abort(400, 'Invalid or missing dict')
 
     if words_raw is None:
-        return Response(render_form(dict_key), content_type='text/html; charset=UTF-8')
+        return Response(render_form(dict_key),
+                        content_type='text/html; charset=UTF-8',
+                        headers={'X-Robots-Tag': 'noindex'})
 
     words, skipped = parse_words(words_raw)
 

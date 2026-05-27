@@ -423,11 +423,16 @@ install even though it is unsigned.
 def create():
     download = request.args.get('download')
 
+    def response(body = None, **kwargs):
+        if request.args:
+            kwargs.setdefault('headers',{})['X-Robots-Tag'] = 'noindex'
+        return Response(body, **kwargs)
+
     if download is None:
         defaults = request.args.get('defaults', 'en_US')
         if defaults not in PRESETS:
             abort(400, 'Invalid defaults preset')
-        return Response(render_form(defaults), content_type='text/html; charset=UTF-8')
+        return response(render_form(defaults), content_type='text/html; charset=UTF-8')
 
     if download not in ('wordlist', 'hunspell', 'aspell', 'libreoffice', 'firefox'):
         abort(400, 'Invalid download type')
@@ -490,9 +495,9 @@ def create():
 
     if request.method == 'HEAD':
         if download == 'wordlist' and fmt == 'inline':
-            resp = Response(content_type=f'text/plain; charset={charset}')
+            resp = response(content_type=f'text/plain; charset={charset}')
         else:
-            resp = Response(content_type='application/octet-stream')
+            resp = response(content_type='application/octet-stream')
         resp.automatically_set_content_length = False
         return resp
 
@@ -530,7 +535,7 @@ def create():
             sys.stderr.write(e.stderr)
             raise
         filename = f'hunspell-{name}.zip'
-        return Response(zip_bytes,
+        return response(zip_bytes,
                         content_type='application/zip',
                         headers={'Content-Disposition': f'attachment; filename={filename}'})
 
@@ -541,7 +546,7 @@ def create():
         except subprocess.CalledProcessError as e:
             sys.stderr.write(e.stderr)
             raise
-        return Response(ext_bytes,
+        return response(ext_bytes,
                         content_type='application/octet-stream',
                         headers={'Content-Disposition': f'attachment; filename={filename}'})
 
@@ -552,7 +557,7 @@ def create():
         except subprocess.CalledProcessError as e:
             sys.stderr.write(e.stderr)
             raise
-        return Response(ext_bytes,
+        return response(ext_bytes,
                         content_type='application/octet-stream',
                         headers={'Content-Disposition': f'attachment; filename={filename}'})
 
@@ -563,7 +568,7 @@ def create():
         except subprocess.CalledProcessError as e:
             sys.stderr.write(e.stderr)
             raise
-        return Response(tar_bytes,
+        return response(tar_bytes,
                         content_type='application/octet-stream',
                         headers={'Content-Disposition': 'attachment; filename=aspell6-en-custom.tar.bz2'})
 
@@ -573,7 +578,7 @@ def create():
     if fmt == 'inline':
         text = header + '---\n' + '\n'.join(sorted_words) + '\n'
         encoded = text.encode(charset)
-        return Response(encoded, content_type=f'text/plain; charset={charset}')
+        return response(encoded, content_type=f'text/plain; charset={charset}')
 
     readme_bytes = header.encode(charset)
     scowl_readme_bytes = README_SCOWL.encode('utf-8')
@@ -585,7 +590,7 @@ def create():
             tar_add_bytes(tf, 'SCOWL-wl/README', readme_bytes)
             tar_add_bytes(tf, 'SCOWL-wl/words.txt', words_bytes)
             tar_add_bytes(tf, 'SCOWL-wl/README_SCOWL.md', scowl_readme_bytes)
-        return Response(buf.getvalue(),
+        return response(buf.getvalue(),
                         content_type='application/octet-stream',
                         headers={'Content-Disposition': 'attachment; filename=SCOWL-wl.tar.gz'})
     else:  # zip
@@ -594,7 +599,7 @@ def create():
             zf.writestr('README', readme_bytes.replace(b'\n', b'\r\n'))
             zf.writestr('words.txt', words_bytes)
             zf.writestr('README_SCOWL.md', scowl_readme_bytes.replace(b'\n', b'\r\n'))
-        return Response(buf.getvalue(),
+        return response(buf.getvalue(),
                         content_type='application/zip',
                         headers={'Content-Disposition': 'attachment; filename=SCOWL-wl.zip'})
 
