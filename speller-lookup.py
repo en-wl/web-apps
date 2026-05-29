@@ -491,16 +491,20 @@ def speller_lookup():
         # to catch decoding and other errors
         abort(400, 'Invalid query string')
 
-    if not args:
-        return Response(render_form(), content_type='text/html; charset=UTF-8')
-
+    dict_name = args.get('dict', None)
     words_raw = args.get('words', None)
-    dict_name = args.get('dict', '')
+
+    if dict_name is None and words_raw is None:
+        return Response(render_form(),
+                        content_type='text/html; charset=UTF-8')
+
+    if dict_name is None:
+        abort(400, 'Missing dict')
 
     dict_key = colName(dict_name)
 
     if dict_key not in DICTS:
-        abort(400, 'Invalid or missing dict')
+        abort(400, 'Invalid dict')
 
     if words_raw is None:
         return Response(render_form(dict_key),
@@ -511,6 +515,6 @@ def speller_lookup():
 
     if request.method == 'POST' and len(words) + len(skipped) <= 5:
         return redirect('/speller-lookup?'
-                        + urlencode([('dict', dict_name), ('words', ','.join(words + skipped))],safe=','))
+                        + urlencode([('dict', dict_name), ('words', ','.join(words + skipped))], safe=','))
 
     return process_lookup(words, dict_key, skipped)
