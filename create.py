@@ -67,8 +67,8 @@ VARIANT_LEVELS = {
     4: '4 *common*',
     5: '5 (variant)',
     6: '6 *acceptable*',
-    7: '7 (uncommon)',
-    8: '8 (archaic)',
+    7: '7 (archaic)',
+    8: '8 (uncommon)',
     9: '9 (invalid)',
 }
 
